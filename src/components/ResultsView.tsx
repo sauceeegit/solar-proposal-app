@@ -54,6 +54,7 @@ export default function ResultsView({
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState("");
   const [saveErr, setSaveErr] = useState("");
+  const [saveToDrive, setSaveToDrive] = useState(true);
   const [photos, setPhotos] = useState<{ ref: string }[]>([]);
   const [photoErr, setPhotoErr] = useState("");
   const [approved, setApproved] = useState<string[]>([]);
@@ -84,16 +85,18 @@ export default function ResultsView({
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      // File a PDF copy into Google Drive (best-effort — never blocks the link)
-      setSaveStatus("Filing PDF to your Google Drive…");
-      try {
-        await fetch("/api/archive-pdf", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ id: data.id }),
-        });
-      } catch {
-        // Drive archive is optional
+      // File a PDF copy into Google Drive only if the user opted in (best-effort)
+      if (saveToDrive) {
+        setSaveStatus("Saving a PDF to your Google Drive…");
+        try {
+          await fetch("/api/archive-pdf", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ id: data.id }),
+          });
+        } catch {
+          // Drive archive is optional
+        }
       }
       router.push(data.url);
     } catch (e) {
@@ -174,6 +177,16 @@ export default function ResultsView({
       </div>
 
       {saveErr && <p className="text-sm text-red-600">{saveErr}</p>}
+      <label className="flex w-fit cursor-pointer items-center gap-2 text-sm text-slate-600">
+        <input
+          type="checkbox"
+          checked={saveToDrive}
+          onChange={(e) => setSaveToDrive(e.target.checked)}
+          disabled={saving}
+          className="h-4 w-4 accent-amber-500"
+        />
+        Save a PDF copy to my Google Drive
+      </label>
       <div className="flex items-center gap-3">
         <button onClick={onBack} disabled={saving} className="rounded border px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">
           ← Adjust roof
