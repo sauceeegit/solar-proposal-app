@@ -52,6 +52,7 @@ export default function ResultsView({
 }) {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState("");
   const [saveErr, setSaveErr] = useState("");
   const [photos, setPhotos] = useState<{ ref: string }[]>([]);
   const [photoErr, setPhotoErr] = useState("");
@@ -74,6 +75,7 @@ export default function ResultsView({
   const generate = async () => {
     setSaving(true);
     setSaveErr("");
+    setSaveStatus("Generating proposal…");
     try {
       const res = await fetch("/api/proposal", {
         method: "POST",
@@ -82,10 +84,22 @@ export default function ResultsView({
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
+      // File a PDF copy into Google Drive (best-effort — never blocks the link)
+      setSaveStatus("Filing PDF to your Google Drive…");
+      try {
+        await fetch("/api/archive-pdf", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ id: data.id }),
+        });
+      } catch {
+        // Drive archive is optional
+      }
       router.push(data.url);
     } catch (e) {
       setSaveErr(String(e));
       setSaving(false);
+      setSaveStatus("");
     }
   };
 
@@ -160,13 +174,14 @@ export default function ResultsView({
       </div>
 
       {saveErr && <p className="text-sm text-red-600">{saveErr}</p>}
-      <div className="flex gap-3">
-        <button onClick={onBack} className="rounded border px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">
+      <div className="flex items-center gap-3">
+        <button onClick={onBack} disabled={saving} className="rounded border px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">
           ← Adjust roof
         </button>
         <button onClick={generate} disabled={saving} className="rounded bg-amber-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-amber-600 disabled:opacity-50">
           {saving ? "Generating…" : "Generate proposal link →"}
         </button>
+        {saving && saveStatus && <span className="text-sm text-slate-500">{saveStatus}</span>}
       </div>
     </section>
   );

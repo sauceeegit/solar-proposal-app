@@ -137,11 +137,18 @@ export default async function ProposalPage(props: { params: Promise<{ id: string
     <main className="mx-auto max-w-3xl px-4 py-8">
       {/* ── Hero ── */}
       <header className="mb-6 overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 to-slate-800 p-8 text-white">
-        <div className="mb-6 flex items-baseline justify-between">
+        <div className="mb-6 flex items-center justify-between">
           <span className="text-2xl font-black tracking-tight">
             SOLVIO<span className="text-amber-400">.</span>
           </span>
-          <span className="text-xs text-slate-400">www.solvio.solar</span>
+          <a
+            href={`/api/archive-pdf?id=${id}`}
+            target="_blank"
+            rel="noopener"
+            className="rounded-full bg-white/10 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur hover:bg-white/20"
+          >
+            ↓ Download PDF
+          </a>
         </div>
         <h1 className="mb-2 text-3xl font-black leading-tight md:text-4xl">
           {narrative?.headline ?? "Your Solar Proposal"}
