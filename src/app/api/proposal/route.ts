@@ -7,6 +7,10 @@ import { generateNarrative } from "@/lib/narrative";
 import { readText, saveBinary, saveText } from "@/lib/storage";
 import type { ProposalResult } from "@/lib/engine/types";
 
+// Narrative (Claude) + GPT image render can take up to a minute — request the
+// max function duration Vercel's Hobby tier allows.
+export const maxDuration = 60;
+
 const LOG_FILE = path.join(process.cwd(), "data", "log.csv");
 
 // Column layout mirrors the future Google Sheet (spec §1) — swap is one function.
