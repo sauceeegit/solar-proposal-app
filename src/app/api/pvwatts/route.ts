@@ -13,8 +13,12 @@ function readCache(): Record<string, unknown> {
 }
 
 function writeCache(cache: Record<string, unknown>) {
-  fs.mkdirSync(path.dirname(CACHE_FILE), { recursive: true });
-  fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 1));
+  try {
+    fs.mkdirSync(path.dirname(CACHE_FILE), { recursive: true });
+    fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 1));
+  } catch {
+    // read-only fs (serverless) — caching is a best-effort optimization
+  }
 }
 
 /**

@@ -1,10 +1,9 @@
-import fs from "fs";
-import path from "path";
 import { notFound } from "next/navigation";
 import { PRICES_LAST_REVIEWED } from "@/config/pricing";
 import { cashFlowSeries } from "@/lib/engine/economics";
 import { toLocalMeters } from "@/lib/engine/roof";
 import { centroid, fitZoom, pixelInImage } from "@/lib/mercator";
+import { readText } from "@/lib/storage";
 import type { Narrative } from "@/lib/narrative";
 import type { LatLng, ProposalResult, SystemOption } from "@/lib/engine/types";
 
@@ -122,9 +121,9 @@ function OptionCard({ o, highlight }: { o: SystemOption; highlight: boolean }) {
 export default async function ProposalPage(props: { params: Promise<{ id: string }> }) {
   const { id } = await props.params;
   if (!/^[\w-]+$/.test(id)) notFound();
-  const file = path.join(process.cwd(), "data", "proposals", `${id}.json`);
-  if (!fs.existsSync(file)) notFound();
-  const { result, createdAt, narrative, photoCount, hasRender } = JSON.parse(fs.readFileSync(file, "utf8")) as {
+  const text = await readText(`proposals/${id}.json`);
+  if (!text) notFound();
+  const { result, createdAt, narrative, photoCount, hasRender } = JSON.parse(text) as {
     result: ProposalResult;
     createdAt: string;
     narrative?: Narrative | null;
