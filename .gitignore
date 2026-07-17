@@ -33,6 +33,9 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# generated customer proposals (addresses, photos, electricity data — never publish)
+/data
+
 # vercel
 .vercel
 

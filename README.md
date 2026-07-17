@@ -1,36 +1,53 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Solvio Solar Proposal App
 
-## Getting Started
+Generate branded, professional solar proposals for Thai buildings from a Google address. The app sizes a rooftop solar system, prices it against approved MEA/PEA inverters, computes savings and payback, and produces a shareable proposal page with an AI-written pitch and an AI render of the panels on the building.
 
-First, run the development server:
+## What it does
+
+1. **Address → building** — geocode a Google address or Maps link (MEA vs PEA utility detected automatically).
+2. **Roof outline** — trace the roof on satellite imagery, with an AI-suggested outline you confirm or redraw. Floors can be counted from Street View.
+3. **System design** — a deterministic engine packs 450 W panels (paired rows, 1.5 m walkways on flat roofs), orients them toward the best roof edge, and picks an approved inverter for the building's utility and phase.
+4. **Economics** — production via NREL PVWatts, with panel degradation and tariff escalation; four optimization modes (max savings, cover daytime load, shortest payback, max roof).
+5. **Proposal** — a shareable page with a Claude-written headline/summary, a satellite panel-layout overlay, an OpenAI render of panels on the building photo, a cash-flow chart, and full assumptions/disclaimers.
+
+The calculation engine owns every number; the AI only writes the words and the visualization.
+
+## Tech stack
+
+- **Next.js 16** (App Router, TypeScript, Tailwind)
+- **Google Maps Platform** — geocoding, satellite/static maps, Places photos, Street View
+- **NREL PVWatts** — solar yield
+- **OpenAI** — roof-outline suggestion, floor counting, panel-on-photo render
+- **Anthropic Claude** — proposal narrative
+- **Vitest** — engine unit tests
+
+## Setup
 
 ```bash
+npm install
+# create .env.local with the keys below, then:
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+`.env.local`:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```
+GOOGLE_MAPS_API_KEY=              # Geocoding, Static Maps, Street View, Places API (New)
+NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=  # same key, exposed to the browser map
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+NREL_API_KEY=DEMO_KEY             # free key: https://developer.nlr.gov/signup/
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Enable these Google Cloud APIs for the key: Maps JavaScript, Geocoding, Maps Static, Street View Static, Places API (New).
 
-## Learn More
+## Tests
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+npx vitest run
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Notes
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Generated proposals are written to `data/` (git-ignored — they contain customer addresses and photos).
+- Prices in `src/config/pricing.ts` are Thai retail as of the `PRICES_LAST_REVIEWED` date; review quarterly.
