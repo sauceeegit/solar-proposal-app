@@ -162,7 +162,9 @@ export function optimize(site: SiteInput, mode: OptimizationMode = "max-savings"
       : `Roof type: ${site.roofType === "tilted-one" ? "tilted (one side)" : "tilted (both sides)"} at ~${site.tiltDeg}° tilt.`,
     `Panels face azimuth ${Math.round(site.azimuthDeg)}° (roof edge direction closest to south).`,
     "Roof material assumed standard; structural check pending site survey.",
-    "No shading obstructions assumed; final layout subject to site survey.",
+    site.shadingFactor != null
+      ? `Shading measured from Google Solar API imagery: this roof averages ${Math.round(site.shadingFactor * 100)}% of its best-exposed area, and production is derated accordingly.`
+      : "No shading obstructions assumed; final layout subject to site survey.",
     `Prices last reviewed 2026-07-12; final price subject to site survey.`,
   ];
 

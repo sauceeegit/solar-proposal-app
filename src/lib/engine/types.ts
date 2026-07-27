@@ -19,10 +19,13 @@ export interface SiteInput {
   floors: number;
   monthlyBillTHB?: number; // optional — decides Output A vs B
   tariffTHBPerKwh: number;
-  /** annual production per kWp from PVWatts for the chosen tilt/azimuth */
+  /** annual production per kWp from PVWatts for the chosen tilt/azimuth,
+   *  already derated by shadingFactor when one was measured */
   yieldKwhPerKwpYr: number;
   tiltDeg: number;
   azimuthDeg: number;
+  /** 0..1 measured shading derate from Google Solar API; undefined = not measured */
+  shadingFactor?: number;
 }
 
 /** One panel rectangle in local meters (for the overlay). */

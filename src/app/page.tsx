@@ -6,6 +6,7 @@ import { DEFAULT_TILT_DEG, type BuildingUse, type RoofType } from "@/config/assu
 import { defaultTariff, utilityForProvince } from "@/lib/engine/utility";
 import { optimize } from "@/lib/engine/optimizer";
 import type { LatLng, OptimizationMode, PackingResult, ProposalResult } from "@/lib/engine/types";
+import type { RoofCheck } from "@/lib/solar-api";
 import ResultsView from "@/components/ResultsView";
 
 const RoofMap = dynamic(() => import("@/components/RoofMap"), { ssr: false });
@@ -38,6 +39,8 @@ export default function Home() {
   const [polygon, setPolygon] = useState<LatLng[]>([]);
   const [packing, setPacking] = useState<PackingResult | null>(null);
   const [roofConfirmed, setRoofConfirmed] = useState(false);
+  const [roofCheck, setRoofCheck] = useState<RoofCheck | null>(null);
+  const [checking, setChecking] = useState(false);
 
   // step 3
   const [mode, setMode] = useState<OptimizationMode>("max-savings");
@@ -72,21 +75,49 @@ export default function Home() {
     setPolygon(poly);
     setPacking(pack);
     setRoofConfirmed(false); // any change to the outline requires re-verification
+    setRoofCheck(null); // and invalidates the Solar API cross-check
   }, []);
+
+  /** On confirm, cross-check the outline against Google Solar API rasters. */
+  const confirmRoof = async (checked: boolean) => {
+    setRoofConfirmed(checked);
+    if (!checked || polygon.length < 3 || roofCheck) return;
+    setChecking(true);
+    try {
+      const r = await fetch("/api/roof-check", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ polygon }),
+      });
+      setRoofCheck(await r.json());
+    } catch {
+      setRoofCheck({ available: false, reason: "check unavailable", warnings: [] });
+    } finally {
+      setChecking(false);
+    }
+  };
 
   const calculate = async (m: OptimizationMode) => {
     if (!picked || !packing) return;
     setBusy(true);
     setCalcErr("");
     try {
-      const tilt = DEFAULT_TILT_DEG[roofType];
-      // panels face the roof-edge normal closest to south (computed by the packer)
-      const azimuth = packing.azimuthDeg;
+      // Measured roof pitch wins on genuinely sloped roofs; otherwise our default.
+      const tilt = roofCheck?.detectedPitchDeg != null && roofCheck.detectedPitchDeg >= 10
+        ? roofCheck.detectedPitchDeg
+        : DEFAULT_TILT_DEG[roofType];
+      // panels face the roof-edge normal closest to south (computed by the packer),
+      // unless Solar API measured a real slope direction
+      const azimuth = roofCheck?.detectedAzimuthDeg ?? packing.azimuthDeg;
       const res = await fetch(
         `/api/pvwatts?lat=${picked.location.lat}&lon=${picked.location.lng}&tilt=${tilt}&azimuth=${Math.round(azimuth)}`
       );
       const data = await res.json();
       if (data.error) throw new Error(data.error);
+      // Apply measured shading from Solar API (PVWatts' 14% loss excludes shading,
+      // so this is not double-counted). Unshaded roofs get a factor of 1.
+      const shading = roofCheck?.available ? roofCheck.shadingFactor ?? 1 : 1;
+      const yieldKwhPerKwpYr = Math.round(data.yieldKwhPerKwpYr * shading);
       setResult(
         optimize(
           {
@@ -101,9 +132,10 @@ export default function Home() {
             floors: floors ? parseInt(floors) : 1,
             monthlyBillTHB: bill ? parseFloat(bill) : undefined,
             tariffTHBPerKwh: effectiveTariff,
-            yieldKwhPerKwpYr: data.yieldKwhPerKwpYr,
+            yieldKwhPerKwpYr,
             tiltDeg: tilt,
             azimuthDeg: azimuth,
+            shadingFactor: roofCheck?.available ? roofCheck.shadingFactor : undefined,
           },
           m
         )
@@ -262,7 +294,7 @@ export default function Home() {
               <input
                 type="checkbox"
                 checked={roofConfirmed}
-                onChange={(e) => setRoofConfirmed(e.target.checked)}
+                onChange={(e) => confirmRoof(e.target.checked)}
                 className="mt-0.5 h-4 w-4 accent-green-600"
               />
               <span className="text-slate-700">
@@ -271,6 +303,51 @@ export default function Home() {
                 the AI suggestion is only a starting point.
               </span>
             </label>
+          )}
+
+          {/* Google Solar API cross-check — advisory only, never changes the design */}
+          {checking && <p className="text-sm text-slate-500">Cross-checking against Google Solar data…</p>}
+          {roofCheck && !checking && (
+            <div className={`rounded-lg border p-3 text-sm ${roofCheck.warnings.length > 0 ? "border-amber-400 bg-amber-50" : "border-slate-200 bg-slate-50"}`}>
+              <div className="mb-1 font-semibold text-slate-800">
+                Google Solar cross-check{roofCheck.available ? "" : " — unavailable"}
+              </div>
+              {!roofCheck.available && (
+                <p className="text-xs text-slate-500">
+                  No Solar API data for this location ({roofCheck.reason}). Your outline is used as-is; shading is assumed none.
+                </p>
+              )}
+              {roofCheck.available && (
+                <ul className="space-y-0.5 text-xs text-slate-600">
+                  {roofCheck.maskCoverage !== undefined && (
+                    <li>
+                      {roofCheck.maskCoverage >= 0.7 ? "✓" : "⚠"} <b>{Math.round(roofCheck.maskCoverage * 100)}%</b> of your outline sits on a roof in Google&apos;s building data
+                    </li>
+                  )}
+                  {roofCheck.shadingFactor !== undefined && (
+                    <li>
+                      {roofCheck.shadingFactor >= 0.9 ? "✓" : "⚠"} Measured shading: roof averages <b>{Math.round(roofCheck.shadingFactor * 100)}%</b> of its best-exposed area
+                      {roofCheck.shadingFactor < 1 && " — production is derated by this"}
+                    </li>
+                  )}
+                  {roofCheck.detectedAreaM2 !== undefined && (
+                    <li>Google measures this building at <b>{roofCheck.detectedAreaM2} m²</b>{packing ? ` (yours: ${Math.round(packing.footprintM2)} m²)` : ""}</li>
+                  )}
+                  {roofCheck.detectedPitchDeg !== undefined && (
+                    <li>
+                      Measured roof pitch <b>{roofCheck.detectedPitchDeg}°</b>
+                      {roofCheck.detectedAzimuthDeg !== undefined ? `, facing ${roofCheck.detectedAzimuthDeg}°` : " (flat — panels aimed south on racking)"}
+                    </li>
+                  )}
+                  <li className="text-slate-400">
+                    Source: Google Solar API {roofCheck.imageryQuality} imagery{roofCheck.imageryDate ? `, ${roofCheck.imageryDate}` : ""} · {roofCheck.samplePixels} samples · advisory only, your outline decides the design
+                  </li>
+                </ul>
+              )}
+              {roofCheck.warnings.map((w, i) => (
+                <p key={i} className="mt-1.5 text-xs font-medium text-amber-700">⚠ {w}</p>
+              ))}
+            </div>
           )}
 
           <div className="flex gap-3">

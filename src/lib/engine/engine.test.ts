@@ -215,6 +215,22 @@ describe("optimizer end-to-end (hotel, Output B)", () => {
     expect(s2.options[0].panelCount).toBe(result.packing.count);
   });
 
+  it("reports measured shading when Solar API provided it, else the assumption", () => {
+    const noShade = optimize(hotelSite, "max-savings");
+    expect(noShade.assumptionNotes.some((n) => /No shading obstructions assumed/.test(n))).toBe(true);
+
+    const measured = optimize({ ...hotelSite, shadingFactor: 0.83 }, "max-savings");
+    expect(measured.assumptionNotes.some((n) => /Shading measured from Google Solar API.*83%/.test(n))).toBe(true);
+    expect(measured.assumptionNotes.some((n) => /No shading obstructions assumed/.test(n))).toBe(false);
+  });
+
+  it("a shading derate lowers production and savings", () => {
+    const full = optimize(hotelSite, "max-savings").scenarios[0].options[0];
+    const shaded = optimize({ ...hotelSite, yieldKwhPerKwpYr: Math.round(1400 * 0.83) }, "max-savings").scenarios[0].options[0];
+    expect(shaded.flows.annualProductionKwh).toBeLessThan(full.flows.annualProductionKwh);
+    expect(shaded.firstYearSavingsTHB).toBeLessThan(full.firstYearSavingsTHB);
+  });
+
   it("Output A when a bill is provided", () => {
     const a = optimize({ ...hotelSite, monthlyBillTHB: 100_000 }, "max-savings");
     expect(a.outputType).toBe("A");
