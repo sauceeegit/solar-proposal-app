@@ -35,6 +35,7 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
   const [status, setStatus] = useState("Click “Detect roof” to find the building automatically, or “Draw roof” to trace it yourself.");
   const [aiBusy, setAiBusy] = useState(false);
   const [altCount, setAltCount] = useState(0);
+  const [warn, setWarn] = useState("");
 
   const clearPanels = () => {
     panelShapesRef.current.forEach((p) => p.setMap(null));
@@ -139,6 +140,7 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
     polyRef.current = null;
     clearPanels();
     clearAlts();
+    setWarn("");
     setVertices([]);
     setDrawing(true);
     setStatus("Click the roof corners. Double-click (or click the first point) to finish.");
@@ -210,6 +212,7 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
     if (!mapRef.current) return;
     setAiBusy(true);
     clearAlts();
+    setWarn("");
     setStatus("Detecting buildings from Google's roof data…");
     try {
       const c = mapRef.current.getCenter()!;
@@ -224,6 +227,39 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
             (others.length > 0 ? `${others.length} other building${others.length > 1 ? "s" : ""} nearby — click one to switch. ` : "") +
             `Drag corners to fine-tune, or redraw.`
         );
+
+        // Google's roof data can lag the live satellite view by years. When it
+        // does, also trace the CURRENT image so the user can compare and pick.
+        if (det.stale) {
+          const yrs = det.imageryAgeMonths != null ? (det.imageryAgeMonths / 12).toFixed(1) : "?";
+          setWarn(
+            `Google's roof data here is from ${det.imageryDate} — ${yrs} years older than the satellite view below. If this building was built or extended since, this outline will be wrong. An AI trace of the current image is shown in amber — click it to use that instead, or redraw manually.`
+          );
+          try {
+            const zoom = mapRef.current.getZoom() ?? 20;
+            const vis = await fetch(`/api/roof-suggest?lat=${c.lat()}&lng=${c.lng()}&zoom=${zoom}`).then((r) => r.json());
+            if (vis.polygon?.length >= 3) {
+              const shape = new google.maps.Polygon({
+                map: mapRef.current!,
+                paths: vis.polygon,
+                clickable: true,
+                fillColor: "#f59e0b",
+                fillOpacity: 0.1,
+                strokeColor: "#f59e0b",
+                strokeWeight: 3,
+                zIndex: 2,
+              });
+              shape.addListener("click", () => {
+                setPolygonOnMap(vis.polygon);
+                setStatus("Switched to the AI trace of the current satellite image — drag corners to fine-tune.");
+              });
+              altShapesRef.current.push(shape);
+              setAltCount((n) => n + 1);
+            }
+          } catch {
+            // comparison trace is best-effort
+          }
+        }
         return;
       }
 
@@ -260,6 +296,11 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
         )}
         <span className="text-xs text-slate-500">{status}</span>
       </div>
+      {warn && (
+        <p className="rounded-lg border border-amber-400 bg-amber-50 p-2.5 text-xs font-medium text-amber-800">
+          ⚠ {warn}
+        </p>
+      )}
       <div ref={divRef} className="h-[480px] w-full rounded-lg border" />
     </div>
   );

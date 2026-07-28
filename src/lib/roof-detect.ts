@@ -23,7 +23,18 @@ export interface RoofDetectResult {
   recommended: number;
   imageryQuality?: string;
   imageryDate?: string;
+  /** how old the mask imagery is, in months — stale imagery misses new builds */
+  imageryAgeMonths?: number;
+  /** true when the imagery is old enough that the building may have changed */
+  stale?: boolean;
 }
+
+/**
+ * Imagery older than this may not reflect the building as it stands today.
+ * Thai BASE coverage commonly runs 2–4 years behind the live satellite tiles,
+ * so this fires often — which is correct: the user must check before quoting.
+ */
+export const STALE_AFTER_MONTHS = 24;
 
 /** Blobs smaller than this are noise (sheds, awnings, mask speckle). */
 const MIN_AREA_M2 = 40;
@@ -172,6 +183,13 @@ export async function detectRoofs(lat: number, lng: number): Promise<RoofDetectR
       return b.areaM2 - a.areaM2;
     });
 
+    let ageMonths: number | undefined;
+    if (layers.imageryDate) {
+      const d = layers.imageryDate;
+      const then = new Date(d.year, (d.month ?? 1) - 1, d.day ?? 1).getTime();
+      ageMonths = Math.max(0, Math.round((Date.now() - then) / (1000 * 60 * 60 * 24 * 30.44)));
+    }
+
     return {
       available: true,
       candidates: candidates.slice(0, 6),
@@ -180,6 +198,8 @@ export async function detectRoofs(lat: number, lng: number): Promise<RoofDetectR
       imageryDate: layers.imageryDate
         ? `${layers.imageryDate.year}-${String(layers.imageryDate.month).padStart(2, "0")}`
         : undefined,
+      imageryAgeMonths: ageMonths,
+      stale: ageMonths != null && ageMonths > STALE_AFTER_MONTHS,
     };
   } catch (e) {
     return { available: false, reason: String(e), candidates: [], recommended: -1 };
