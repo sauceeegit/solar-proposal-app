@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { importLibrary, setOptions } from "@googlemaps/js-api-loader";
 import { packPanels, toLocalMeters } from "@/lib/engine/roof";
+import { SQUARE_TOLERANCE_DEG, snapRightAngles, squareNextPoint } from "@/lib/engine/snap";
 import type { LatLng, PackingResult } from "@/lib/engine/types";
 import type { RoofType } from "@/config/assumptions";
 
@@ -36,6 +37,10 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
   const [aiBusy, setAiBusy] = useState(false);
   const [altCount, setAltCount] = useState(0);
   const [warn, setWarn] = useState("");
+  const [snap, setSnap] = useState(true);
+  // the drawing listeners are created once, so they read the toggle from a ref
+  const snapRef = useRef(true);
+  snapRef.current = snap;
 
   const clearPanels = () => {
     panelShapesRef.current.forEach((p) => p.setMap(null));
@@ -143,7 +148,11 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
     setWarn("");
     setVertices([]);
     setDrawing(true);
-    setStatus("Click the roof corners. Double-click (or click the first point) to finish.");
+    setStatus(
+      snapRef.current
+        ? `Click the roof corners — anything within ${SQUARE_TOLERANCE_DEG}° of square snaps to exactly 90°. Double-click (or click the first point) to finish.`
+        : "Click the roof corners. Double-click (or click the first point) to finish."
+    );
     const map = mapRef.current;
     const pts: LatLng[] = [];
     const markers: google.maps.Marker[] = [];
@@ -155,26 +164,52 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
       markers.forEach((m) => m.setMap(null));
       tempLine?.setMap(null);
       setDrawing(false);
-      if (pts.length >= 3) setPolygonOnMap([...pts]);
-      else setStatus("Need at least 3 points — try again.");
+      if (pts.length < 3) return setStatus("Need at least 3 points — try again.");
+      // the last corner and the closing corner only exist once the ring is
+      // closed, so square the finished outline as a whole
+      setPolygonOnMap(snapRef.current ? snapRightAngles(pts) : [...pts]);
     };
 
     clickListenerRef.current = map.addListener("click", (e: google.maps.MapMouseEvent) => {
       if (!e.latLng) return;
-      const p = { lat: e.latLng.lat(), lng: e.latLng.lng() };
+      const raw = { lat: e.latLng.lat(), lng: e.latLng.lng() };
       // clicking near the first point closes the polygon
       if (pts.length >= 3) {
         const first = pts[0];
-        const d = Math.hypot((p.lat - first.lat) * 111320, (p.lng - first.lng) * 111320 * Math.cos((p.lat * Math.PI) / 180));
+        const d = Math.hypot((raw.lat - first.lat) * 111320, (raw.lng - first.lng) * 111320 * Math.cos((raw.lat * Math.PI) / 180));
         if (d < 1.5) return finish();
       }
+      const p = snapRef.current ? squareNextPoint(pts, raw) : raw;
+      const snapped = p !== raw;
       pts.push(p);
       setVertices([...pts]);
-      markers.push(new google.maps.Marker({ map, position: p, icon: { path: google.maps.SymbolPath.CIRCLE, scale: 4, fillColor: "#f59e0b", fillOpacity: 1, strokeWeight: 1 } }));
+      markers.push(
+        new google.maps.Marker({
+          map,
+          position: p,
+          icon: { path: google.maps.SymbolPath.CIRCLE, scale: 4, fillColor: snapped ? "#22c55e" : "#f59e0b", fillOpacity: 1, strokeWeight: 1 },
+        })
+      );
+      if (snapped) setStatus(`Corner ${pts.length - 1} squared to 90°. Keep clicking corners; double-click to finish.`);
       tempLine?.setMap(null);
       tempLine = new google.maps.Polyline({ map, path: pts, strokeColor: "#f59e0b", strokeWeight: 2 });
     });
     map.addListener("dblclick", finish);
+  };
+
+  /** Square up the outline currently on the map (detected outlines included). */
+  const squareUp = () => {
+    const gp = polyRef.current;
+    if (!gp) return;
+    const cur: LatLng[] = gp.getPath().getArray().map((v) => ({ lat: v.lat(), lng: v.lng() }));
+    const snapped = snapRightAngles(cur);
+    if (snapped === cur) {
+      setStatus(`Nothing to square — no corner is within ${SQUARE_TOLERANCE_DEG}° of 90° (or the correction would have moved the outline too far).`);
+      return;
+    }
+    setPolygonOnMap(snapped);
+    // setPolygonOnMap queues the packing status — append rather than clobber it
+    setStatus((s) => `${s} Corners squared to 90°.`);
   };
 
   /** Draw the non-selected candidates faintly; clicking one swaps it in. */
@@ -289,6 +324,18 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
         <button onClick={detectRoof} disabled={aiBusy || drawing} className="rounded border border-amber-500 px-3 py-1.5 text-sm font-semibold text-amber-600 hover:bg-amber-50 disabled:opacity-50">
           {aiBusy ? "Detecting…" : "Detect roof"}
         </button>
+        <button
+          onClick={squareUp}
+          disabled={drawing || !polyRef.current}
+          title={`Corners within ${SQUARE_TOLERANCE_DEG}° of square become exactly 90°`}
+          className="rounded border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+        >
+          Square corners
+        </button>
+        <label className="flex items-center gap-1.5 text-xs text-slate-600" title={`While drawing, corners within ${SQUARE_TOLERANCE_DEG}° of square snap to exactly 90°`}>
+          <input type="checkbox" checked={snap} onChange={(e) => setSnap(e.target.checked)} className="h-3.5 w-3.5" />
+          Snap to 90°
+        </label>
         {altCount > 0 && (
           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
             {altCount} other building{altCount > 1 ? "s" : ""} — click to switch

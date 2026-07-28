@@ -18,6 +18,15 @@ export function toLocalMeters(poly: LatLng[]): { pts: { x: number; y: number }[]
   return { pts, origin };
 }
 
+/** Inverse of toLocalMeters: local meters around `origin` back to lat/lng. */
+export function fromLocalMeters(origin: LatLng, x: number, y: number): LatLng {
+  const cosLat = Math.cos((origin.lat * Math.PI) / 180);
+  return {
+    lat: origin.lat + ((y / EARTH_R) * 180) / Math.PI,
+    lng: origin.lng + ((x / (EARTH_R * cosLat)) * 180) / Math.PI,
+  };
+}
+
 export function polygonAreaM2(pts: { x: number; y: number }[]): number {
   let a = 0;
   for (let i = 0; i < pts.length; i++) {
