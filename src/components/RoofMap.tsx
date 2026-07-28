@@ -28,15 +28,23 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
   const mapRef = useRef<google.maps.Map | null>(null);
   const polyRef = useRef<google.maps.Polygon | null>(null);
   const panelShapesRef = useRef<google.maps.Polygon[]>([]);
+  const altShapesRef = useRef<google.maps.Polygon[]>([]);
   const clickListenerRef = useRef<google.maps.MapsEventListener | null>(null);
   const [drawing, setDrawing] = useState(false);
   const [vertices, setVertices] = useState<LatLng[]>([]);
-  const [status, setStatus] = useState("Click “Draw roof”, then click the roof corners on the map. Click the first point again (or double-click) to finish.");
+  const [status, setStatus] = useState("Click “Detect roof” to find the building automatically, or “Draw roof” to trace it yourself.");
   const [aiBusy, setAiBusy] = useState(false);
+  const [altCount, setAltCount] = useState(0);
 
   const clearPanels = () => {
     panelShapesRef.current.forEach((p) => p.setMap(null));
     panelShapesRef.current = [];
+  };
+
+  const clearAlts = () => {
+    altShapesRef.current.forEach((p) => p.setMap(null));
+    altShapesRef.current = [];
+    setAltCount(0);
   };
 
   const renderPacking = useCallback(
@@ -130,6 +138,7 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
     polyRef.current?.setMap(null);
     polyRef.current = null;
     clearPanels();
+    clearAlts();
     setVertices([]);
     setDrawing(true);
     setStatus("Click the roof corners. Double-click (or click the first point) to finish.");
@@ -166,23 +175,70 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
     map.addListener("dblclick", finish);
   };
 
-  const aiSuggest = async () => {
+  /** Draw the non-selected candidates faintly; clicking one swaps it in. */
+  const showAlternates = useCallback(
+    (cands: { polygon: LatLng[]; areaM2: number }[]) => {
+      clearAlts();
+      const map = mapRef.current!;
+      for (const cand of cands) {
+        const shape = new google.maps.Polygon({
+          map,
+          paths: cand.polygon,
+          clickable: true,
+          fillColor: "#94a3b8",
+          fillOpacity: 0.12,
+          strokeColor: "#e2e8f0",
+          strokeWeight: 2,
+          zIndex: 1,
+        });
+        shape.addListener("click", () => {
+          setPolygonOnMap(cand.polygon);
+          setStatus(`Switched to the ${cand.areaM2} m² building — drag corners to fine-tune, or redraw.`);
+        });
+        altShapesRef.current.push(shape);
+      }
+      setAltCount(cands.length);
+    },
+    [setPolygonOnMap]
+  );
+
+  /**
+   * Detect the roof. Primary: Google's building mask (measured segmentation,
+   * 0.5 m). Fallback: vision model outline. Either way the user confirms.
+   */
+  const detectRoof = async () => {
     if (!mapRef.current) return;
     setAiBusy(true);
-    setStatus("Asking AI to outline the roof…");
+    clearAlts();
+    setStatus("Detecting buildings from Google's roof data…");
     try {
       const c = mapRef.current.getCenter()!;
+      const det = await fetch(`/api/roof-detect?lat=${c.lat()}&lng=${c.lng()}`).then((r) => r.json());
+      if (det.available && det.candidates?.length > 0) {
+        const best = det.candidates[det.recommended] ?? det.candidates[0];
+        setPolygonOnMap(best.polygon);
+        const others = det.candidates.filter((_: unknown, i: number) => i !== (det.recommended ?? 0));
+        if (others.length > 0) showAlternates(others);
+        setStatus(
+          `Detected a ${best.areaM2} m² building from Google roof data (${det.imageryQuality}${det.imageryDate ? ` ${det.imageryDate}` : ""}). ` +
+            (others.length > 0 ? `${others.length} other building${others.length > 1 ? "s" : ""} nearby — click one to switch. ` : "") +
+            `Drag corners to fine-tune, or redraw.`
+        );
+        return;
+      }
+
+      // fallback: vision-model outline
+      setStatus("No Google roof data here — asking AI to trace it instead…");
       const zoom = mapRef.current.getZoom() ?? 20;
-      const res = await fetch(`/api/roof-suggest?lat=${c.lat()}&lng=${c.lng()}&zoom=${zoom}`);
-      const data = await res.json();
+      const data = await fetch(`/api/roof-suggest?lat=${c.lat()}&lng=${c.lng()}&zoom=${zoom}`).then((r) => r.json());
       if (data.polygon?.length >= 3) {
         setPolygonOnMap(data.polygon);
-        setStatus("AI roof outline placed — drag the corners to correct it, or redraw.");
+        setStatus("AI-traced outline placed (less precise than roof data) — check it carefully and drag corners to correct.");
       } else {
-        setStatus(`AI could not outline the roof${data.error ? ` (${data.error})` : ""} — please draw it manually.`);
+        setStatus(`Could not detect the roof${det.reason ? ` (${det.reason})` : ""} — please draw it manually.`);
       }
     } catch {
-      setStatus("AI suggestion failed — please draw the roof manually.");
+      setStatus("Detection failed — please draw the roof manually.");
     } finally {
       setAiBusy(false);
     }
@@ -194,9 +250,14 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
         <button onClick={startDrawing} disabled={drawing} className="rounded bg-amber-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-amber-600 disabled:opacity-50">
           {drawing ? `Drawing… (${vertices.length} pts)` : polyRef.current ? "Redraw roof" : "Draw roof"}
         </button>
-        <button onClick={aiSuggest} disabled={aiBusy || drawing} className="rounded border border-amber-500 px-3 py-1.5 text-sm font-semibold text-amber-600 hover:bg-amber-50 disabled:opacity-50">
-          {aiBusy ? "AI thinking…" : "AI suggest outline"}
+        <button onClick={detectRoof} disabled={aiBusy || drawing} className="rounded border border-amber-500 px-3 py-1.5 text-sm font-semibold text-amber-600 hover:bg-amber-50 disabled:opacity-50">
+          {aiBusy ? "Detecting…" : "Detect roof"}
         </button>
+        {altCount > 0 && (
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
+            {altCount} other building{altCount > 1 ? "s" : ""} — click to switch
+          </span>
+        )}
         <span className="text-xs text-slate-500">{status}</span>
       </div>
       <div ref={divRef} className="h-[480px] w-full rounded-lg border" />
