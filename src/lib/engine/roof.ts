@@ -27,7 +27,11 @@ export function polygonAreaM2(pts: { x: number; y: number }[]): number {
   return Math.abs(a) / 2;
 }
 
-/** Conservative inset: move each vertex toward the centroid (spec: 0.4 m edges). */
+/**
+ * Approximate inward offset (vertices moved toward the centroid). Used only for
+ * the reported usable-area figure — panel placement enforces the edge clearance
+ * exactly via distance-to-boundary, see packPanels.
+ */
 export function insetPolygon(pts: { x: number; y: number }[], meters: number) {
   const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
   const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
@@ -35,9 +39,32 @@ export function insetPolygon(pts: { x: number; y: number }[], meters: number) {
     const dx = p.x - cx;
     const dy = p.y - cy;
     const d = Math.hypot(dx, dy) || 1;
-    const shrink = Math.min(meters * 1.3, d * 0.5); // 1.3× for conservatism vs true edge offset
+    const shrink = Math.min(meters, d * 0.5);
     return { x: p.x - (dx / d) * shrink, y: p.y - (dy / d) * shrink };
   });
+}
+
+/** Shortest distance from a point to a line segment. */
+function distToSegment(
+  px: number, py: number,
+  ax: number, ay: number, bx: number, by: number
+): number {
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  if (len2 === 0) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+/** Shortest distance from a point to the polygon's boundary. */
+function distToBoundary(px: number, py: number, poly: { x: number; y: number }[]): number {
+  let min = Infinity;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const d = distToSegment(px, py, poly[j].x, poly[j].y, poly[i].x, poly[i].y);
+    if (d < min) min = d;
+  }
+  return min;
 }
 
 function pointInPolygon(px: number, py: number, poly: { x: number; y: number }[]): boolean {
@@ -65,9 +92,11 @@ function longestEdgeAngle(pts: { x: number; y: number }[]): number {
 }
 
 /**
- * Pack panels into the roof polygon.
- * Pitched roofs: plan depth of a panel = length × cos(tilt), packed contiguous rows.
- * Flat roofs: rows spaced for GCR, plus walkway factor.
+ * Pack panels into the roof polygon on a uniform grid, per the layout spec:
+ *   • 200 mm clearance from the building edge, all around the outline
+ *   • 100 mm between panels within a row (short edge to short edge)
+ *   • 400 mm between rows
+ * Panel plan depth is length × cos(tilt), so pitched roofs pack slightly tighter.
  * The returned layout IS the design: count = panels.length everywhere downstream.
  */
 export function packPanels(roofPolygon: LatLng[], roofType: RoofType, tiltDeg?: number): PackingResult {
@@ -75,11 +104,12 @@ export function packPanels(roofPolygon: LatLng[], roofType: RoofType, tiltDeg?: 
   const tiltRad = (tilt * Math.PI) / 180;
   const { pts } = toLocalMeters(roofPolygon);
   const footprintM2 = polygonAreaM2(pts);
-  const inset = insetPolygon(pts, PACKING.edgeSetbackM);
+  const inset = insetPolygon(pts, PACKING.edgeClearanceM);
 
-  const panelW = PANEL.widthM; // across the row
+  const panelW = PANEL.widthM; // short edge — runs across the row
   const planDepth = PANEL.lengthM * Math.cos(tiltRad); // up-slope footprint
-  const colPitch = panelW; // panels sit edge-to-edge along a row
+  const colPitch = panelW + PACKING.withinRowGapM;
+  const rowPitch = planDepth + PACKING.betweenRowsGapM;
 
   // Row axis: the roof's two edge directions are candidates (longest edge and
   // its perpendicular). Panels face perpendicular to the rows — pick the
@@ -96,43 +126,29 @@ export function packPanels(roofPolygon: LatLng[], roofType: RoofType, tiltDeg?: 
     Math.abs(facingOf(c) - 180) < Math.abs(facingOf(best) - 180) ? c : best
   );
   const azimuthDeg = Math.round(facingOf(ang));
+  // Work in the row-aligned frame: rotation preserves distances, so the edge
+  // clearance can be enforced exactly against the real (un-inset) outline.
   const cosA = Math.cos(-ang), sinA = Math.sin(-ang);
-  const rot = inset.map((p) => ({ x: p.x * cosA - p.y * sinA, y: p.x * sinA + p.y * cosA }));
+  const rot = pts.map((p) => ({ x: p.x * cosA - p.y * sinA, y: p.x * sinA + p.y * cosA }));
   const minX = Math.min(...rot.map((p) => p.x)), maxX = Math.max(...rot.map((p) => p.x));
   const minY = Math.min(...rot.map((p) => p.y)), maxY = Math.max(...rot.map((p) => p.y));
-
-  // Row positions: flat roofs use blocks of rows back-to-back (no spacing
-  // within a block) separated by walkways; pitched roofs pack contiguously.
-  const rowYs: number[] = [];
-  let yCursor = minY + planDepth / 2;
-  let rowsInBlock = 0;
-  while (yCursor <= maxY - planDepth / 2 + 1e-9) {
-    rowYs.push(yCursor);
-    rowsInBlock++;
-    if (roofType === "flat" && rowsInBlock >= PACKING.rowsPerBlock) {
-      yCursor += planDepth + PACKING.walkwayM; // walkway between blocks
-      rowsInBlock = 0;
-    } else {
-      yCursor += planDepth;
-    }
-  }
+  const clear = PACKING.edgeClearanceM;
 
   const panels: PanelRect[] = [];
   const cosB = Math.cos(ang), sinB = Math.sin(ang);
-  for (const y of rowYs) {
-    for (let x = minX + colPitch / 2; x <= maxX - colPitch / 2 + 1e-9; x += colPitch) {
-      // all 4 corners must be inside the inset polygon (in the rotated frame)
-      const corners = [
-        [x - panelW / 2, y - planDepth / 2],
-        [x + panelW / 2, y - planDepth / 2],
-        [x + panelW / 2, y + planDepth / 2],
-        [x - panelW / 2, y + planDepth / 2],
-      ];
-      const ok = corners.every(([cx, cy]) => {
-        const wx = cx * cosB - cy * sinB;
-        const wy = cx * sinB + cy * cosB;
-        return pointInPolygon(wx, wy, inset);
-      });
+  // Start where the clearance could first be met — the bounding-box edge itself
+  // can never pass, so beginning there would waste a whole pitch.
+  for (let y = minY + clear + planDepth / 2; y <= maxY - clear - planDepth / 2 + 1e-9; y += rowPitch) {
+    for (let x = minX + clear + panelW / 2; x <= maxX - clear - panelW / 2 + 1e-9; x += colPitch) {
+      const x0 = x - panelW / 2, x1 = x + panelW / 2;
+      const y0 = y - planDepth / 2, y1 = y + planDepth / 2;
+      const corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+      // every corner inside the roof AND at least `clear` from any edge
+      let ok = corners.every(
+        ([cx, cy]) => pointInPolygon(cx, cy, rot) && distToBoundary(cx, cy, rot) >= clear
+      );
+      // guard the concave case: a roof vertex poking into the panel between corners
+      if (ok) ok = !rot.some((v) => v.x > x0 && v.x < x1 && v.y > y0 && v.y < y1);
       if (ok) {
         panels.push({
           x: x * cosB - y * sinB,

@@ -49,10 +49,14 @@ export const FINANCE = {
 
 // ── Panels & packing (spec §4, §5.1–5.2) ──────────────────────────────
 export const PANEL = { watt: 450, lengthM: 1.76, widthM: 1.13 };
+/** Panel layout spacing rules. */
 export const PACKING = {
-  edgeSetbackM: 0.4,
-  rowsPerBlock: 2, // flat roofs: rows paired back-to-back without spacing
-  walkwayM: 1.5, // walkway between row blocks on flat roofs
+  /** panel to the building edge, all around the outline */
+  edgeClearanceM: 0.2,
+  /** between panels within a row, short edge to short edge */
+  withinRowGapM: 0.1,
+  /** row to row */
+  betweenRowsGapM: 0.4,
 };
 export const SYSTEM = {
   minKw: 3,

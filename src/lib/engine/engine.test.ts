@@ -107,11 +107,60 @@ describe("roof geometry", () => {
     }
   });
 
-  it("pitched roof packs fewer plan-view panels per row but uses cos(tilt) depth", () => {
+  it("pitched roof panels have a shallower plan depth, so never pack fewer", () => {
     const flat = packPanels(rectRoof, "flat");
     const pitched = packPanels(rectRoof, "tilted-two", 20);
-    // pitched packs denser than flat (no GCR row spacing)
-    expect(pitched.count).toBeGreaterThan(flat.count);
+    // steeper tilt → smaller plan-view footprint per panel
+    expect(pitched.panels[0].h).toBeLessThan(flat.panels[0].h);
+    expect(pitched.count).toBeGreaterThanOrEqual(flat.count);
+  });
+
+  it("honours the layout spec: 200 mm edges, 100 mm within a row, 400 mm between rows", () => {
+    const p = packPanels(rectRoof, "flat");
+    const { pts } = toLocalMeters(rectRoof);
+    expect(p.panels.length).toBeGreaterThan(50);
+    expect(p.panels[0].rotDeg).toBeCloseTo(0, 6); // axis-aligned test roof
+
+    // 200 mm clearance: every corner at least 0.2 m inside the outline
+    const distToSeg = (px: number, py: number, ax: number, ay: number, bx: number, by: number) => {
+      const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+      if (l2 === 0) return Math.hypot(px - ax, py - ay);
+      const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2));
+      return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+    };
+    for (const pan of p.panels) {
+      for (const [dx, dy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+        const cx = pan.x + (dx * pan.w) / 2, cy = pan.y + (dy * pan.h) / 2;
+        let min = Infinity;
+        for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+          min = Math.min(min, distToSeg(cx, cy, pts[j].x, pts[j].y, pts[i].x, pts[i].y));
+        }
+        expect(min).toBeGreaterThanOrEqual(0.2 - 1e-6);
+      }
+    }
+
+    // 100 mm within a row: group by row, check edge-to-edge gaps
+    const rows = new Map<string, typeof p.panels>();
+    for (const pan of p.panels) {
+      const k = pan.y.toFixed(3);
+      rows.set(k, [...(rows.get(k) ?? []), pan]);
+    }
+    let checkedInRow = 0;
+    for (const row of rows.values()) {
+      const xs = row.map((r) => r.x).sort((a, b) => a - b);
+      for (let i = 1; i < xs.length; i++) {
+        expect(xs[i] - xs[i - 1] - p.panels[0].w).toBeCloseTo(0.1, 6);
+        checkedInRow++;
+      }
+    }
+    expect(checkedInRow).toBeGreaterThan(0);
+
+    // 400 mm between rows (use real y values, not the rounded group keys)
+    const ys = [...rows.values()].map((r) => r[0].y).sort((a, b) => a - b);
+    expect(ys.length).toBeGreaterThan(1);
+    for (let i = 1; i < ys.length; i++) {
+      expect(ys[i] - ys[i - 1] - p.panels[0].h).toBeCloseTo(0.4, 6);
+    }
   });
 });
 

@@ -158,8 +158,9 @@ export function optimize(site: SiteInput, mode: OptimizationMode = "max-savings"
 
   const notes: string[] = [
     site.roofType === "flat"
-      ? "Roof treated as flat (default assumption): 10° tilted racking, rows paired back-to-back with 1.5 m walkways between pairs; confirm at site survey."
+      ? `Roof treated as flat (default assumption) with ${site.tiltDeg}° tilted racking; confirm at site survey.`
       : `Roof type: ${site.roofType === "tilted-one" ? "tilted (one side)" : "tilted (both sides)"} at ~${site.tiltDeg}° tilt.`,
+    "Panel layout: 200 mm clearance from all roof edges, 100 mm between panels within a row, 400 mm between rows.",
     `Panels face azimuth ${Math.round(site.azimuthDeg)}° (roof edge direction closest to south).`,
     "Roof material assumed standard; structural check pending site survey.",
     site.shadingFactor != null
