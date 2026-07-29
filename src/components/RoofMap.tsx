@@ -46,7 +46,6 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
   const [status, setStatus] = useState("Click “Detect roof” to find the building automatically, or “Draw roof” to trace it yourself.");
   const [aiBusy, setAiBusy] = useState(false);
   const [altCount, setAltCount] = useState(0);
-  const [hasTrace, setHasTrace] = useState(false);
   const [warn, setWarn] = useState("");
   const [snap, setSnap] = useState(true);
   const [rectAssume, setRectAssume] = useState(true);
@@ -67,7 +66,6 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
     altShapesRef.current.forEach((p) => p.setMap(null));
     altShapesRef.current = [];
     setAltCount(0);
-    setHasTrace(false);
   };
 
   /**
@@ -461,39 +459,15 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
             `Drag corners to fine-tune, or redraw.`
         );
 
-        // Google's roof data can lag the live satellite view by years. When it
-        // does, also trace the CURRENT image so the user can compare and pick.
+        // Google's roof data can lag the live satellite view by years. We used
+        // to drop an AI trace of the current image on top as a second opinion,
+        // but it landed asynchronously — often after the user had started
+        // redrawing — and one stray click replaced their work. Warn instead.
         if (det.stale) {
           const yrs = det.imageryAgeMonths != null ? (det.imageryAgeMonths / 12).toFixed(1) : "?";
           setWarn(
-            `Google's roof data here is from ${det.imageryDate} — ${yrs} years older than the satellite view below. If this building was built or extended since, this outline will be wrong. A second opinion traced from the current image is outlined in blue — click it to use that instead, or redraw manually.`
+            `Google's roof data here is from ${det.imageryDate} — ${yrs} years older than the satellite view below. If this building was built or extended since, this outline will be wrong: compare it against the image and redraw the roof yourself if it does not match.`
           );
-          try {
-            const zoom = mapRef.current.getZoom() ?? 20;
-            const vis = await fetch(`/api/roof-suggest?lat=${c.lat()}&lng=${c.lng()}&zoom=${zoom}`).then((r) => r.json());
-            if (vis.polygon?.length >= 3) {
-              // deliberately NOT amber: amber always means "this is the outline
-              // that will be quoted", and only one shape may claim that
-              const shape = new google.maps.Polygon({
-                map: mapRef.current!,
-                paths: vis.polygon,
-                clickable: true,
-                fillColor: "#38bdf8",
-                fillOpacity: 0.12,
-                strokeColor: "#38bdf8",
-                strokeWeight: 3,
-                zIndex: 2,
-              });
-              shape.addListener("click", () => {
-                placePolygon(vis.polygon);
-                setStatus("Switched to the AI trace of the current satellite image — drag corners to fine-tune.");
-              });
-              altShapesRef.current.push(shape);
-              setHasTrace(true);
-            }
-          } catch {
-            // comparison trace is best-effort
-          }
         }
         return;
       }
@@ -564,12 +538,6 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
           <span className="flex items-center gap-1.5">
             <span className="inline-block h-2.5 w-4 rounded-sm border-2 border-slate-300 bg-slate-400/20" />
             {altCount} other building{altCount > 1 ? "s" : ""} nearby — click one to use it instead
-          </span>
-        )}
-        {hasTrace && (
-          <span className="flex items-center gap-1.5">
-            <span className="inline-block h-2.5 w-4 rounded-sm border-2 border-sky-400 bg-sky-400/15" />
-            AI trace of today&apos;s image — click to use it instead
           </span>
         )}
       </div>
