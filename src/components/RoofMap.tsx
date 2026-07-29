@@ -32,7 +32,6 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
   const mapRef = useRef<google.maps.Map | null>(null);
   const polyRef = useRef<google.maps.Polygon | null>(null);
   const panelShapesRef = useRef<google.maps.Polygon[]>([]);
-  const altShapesRef = useRef<google.maps.Polygon[]>([]);
   const obsShapesRef = useRef<google.maps.Polygon[]>([]);
   const clickListenerRef = useRef<google.maps.MapsEventListener | null>(null);
   const obsListenerRef = useRef<google.maps.MapsEventListener | null>(null);
@@ -45,27 +44,22 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
   const [vertices, setVertices] = useState<LatLng[]>([]);
   const [status, setStatus] = useState("Click “Detect roof” to find the building automatically, or “Draw roof” to trace it yourself.");
   const [aiBusy, setAiBusy] = useState(false);
-  const [altCount, setAltCount] = useState(0);
   const [warn, setWarn] = useState("");
   const [snap, setSnap] = useState(true);
   const [rectAssume, setRectAssume] = useState(true);
   const [obsCount, setObsCount] = useState(0);
   const [addingObs, setAddingObs] = useState(false);
+  /** mirrors polyRef for rendering — a ref read during render can be stale */
+  const [hasPoly, setHasPoly] = useState(false);
   // the drawing listeners are created once, so they read the toggles from refs
   const snapRef = useRef(true);
-  snapRef.current = snap;
   const rectRef = useRef(true);
-  rectRef.current = rectAssume;
+  useEffect(() => { snapRef.current = snap; }, [snap]);
+  useEffect(() => { rectRef.current = rectAssume; }, [rectAssume]);
 
   const clearPanels = () => {
     panelShapesRef.current.forEach((p) => p.setMap(null));
     panelShapesRef.current = [];
-  };
-
-  const clearAlts = () => {
-    altShapesRef.current.forEach((p) => p.setMap(null));
-    altShapesRef.current = [];
-    setAltCount(0);
   };
 
   /**
@@ -73,10 +67,9 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
    * them goes inert while the user is clicking corners for a roof or a keep-out.
    */
   const setShapesInert = useCallback((inert: boolean) => {
-    polyRef.current?.setOptions({ clickable: !inert, draggable: !inert, editable: !inert });
-    for (const s of [...obsShapesRef.current, ...altShapesRef.current]) {
-      s.setOptions({ clickable: !inert, draggable: !inert && obsShapesRef.current.includes(s), editable: !inert && obsShapesRef.current.includes(s) });
-    }
+    const opts = { clickable: !inert, draggable: !inert, editable: !inert };
+    polyRef.current?.setOptions(opts);
+    for (const s of obsShapesRef.current) s.setOptions(opts);
   }, []);
 
   const obstructionPaths = useCallback(
@@ -151,14 +144,6 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
     mapRef.current?.setCenter(center);
   }, [center]);
 
-  /** Shift every keep-out box by the same amount, so they ride with the roof. */
-  const shiftObstructions = useCallback((dLat: number, dLng: number) => {
-    for (const s of obsShapesRef.current) {
-      const path = s.getPath();
-      path.forEach((v, i) => path.setAt(i, new google.maps.LatLng(v.lat() + dLat, v.lng() + dLng)));
-    }
-  }, []);
-
   const setPolygonOnMap = useCallback(
     (path: LatLng[]) => {
       polyRef.current?.setMap(null);
@@ -173,23 +158,19 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
         strokeWeight: 2,
       });
       polyRef.current = gp;
+      setHasPoly(true);
       const sync = () => {
         const p: LatLng[] = gp.getPath().getArray().map((v) => ({ lat: v.lat(), lng: v.lng() }));
         commitPolygon(p);
       };
       ["set_at", "insert_at", "remove_at"].forEach((ev) => gp.getPath().addListener(ev, sync));
-      // dragging the whole outline fires no path events, so track it separately
-      let from: google.maps.LatLng | null = null;
-      gp.addListener("dragstart", () => { from = gp.getPath().getAt(0); });
-      gp.addListener("dragend", () => {
-        const to = gp.getPath().getAt(0);
-        if (from) shiftObstructions(to.lat() - from.lat(), to.lng() - from.lng());
-        from = null;
-        sync();
-      });
+      // dragging the whole outline fires no path events. Obstructions stay put:
+      // they mark real things on the ground, so moving the roof over them is a
+      // correction to the roof, not to where the water tank sits.
+      gp.addListener("dragend", sync);
       sync();
     },
-    [commitPolygon, shiftObstructions]
+    [commitPolygon]
   );
 
   /**
@@ -235,8 +216,8 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
     if (!mapRef.current) return;
     polyRef.current?.setMap(null);
     polyRef.current = null;
+    setHasPoly(false);
     clearPanels();
-    clearAlts();
     setWarn("");
     setVertices([]);
     setDrawing(true);
@@ -408,33 +389,6 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
     });
   };
 
-  /** Draw the non-selected candidates faintly; clicking one swaps it in. */
-  const showAlternates = useCallback(
-    (cands: { polygon: LatLng[]; areaM2: number }[]) => {
-      clearAlts();
-      const map = mapRef.current!;
-      for (const cand of cands) {
-        const shape = new google.maps.Polygon({
-          map,
-          paths: cand.polygon,
-          clickable: true,
-          fillColor: "#94a3b8",
-          fillOpacity: 0.12,
-          strokeColor: "#e2e8f0",
-          strokeWeight: 2,
-          zIndex: 1,
-        });
-        shape.addListener("click", () => {
-          placePolygon(cand.polygon);
-          setStatus(`Switched to the ${cand.areaM2} m² building — drag corners to fine-tune, or redraw.`);
-        });
-        altShapesRef.current.push(shape);
-      }
-      setAltCount(cands.length);
-    },
-    [placePolygon]
-  );
-
   /**
    * Detect the roof. Primary: Google's building mask (measured segmentation,
    * 0.5 m). Fallback: vision model outline. Either way the user confirms.
@@ -442,21 +396,20 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
   const detectRoof = async () => {
     if (!mapRef.current) return;
     setAiBusy(true);
-    clearAlts();
     setWarn("");
     setStatus("Detecting buildings from Google's roof data…");
     try {
       const c = mapRef.current.getCenter()!;
       const det = await fetch(`/api/roof-detect?lat=${c.lat()}&lng=${c.lng()}`).then((r) => r.json());
       if (det.available && det.candidates?.length > 0) {
+        // only the best-matching building is drawn — the neighbours used to be
+        // shown as clickable grey footprints, which just cluttered the map and
+        // made it easy to wipe a corrected outline by accident
         const best = det.candidates[det.recommended] ?? det.candidates[0];
         placePolygon(best.polygon);
-        const others = det.candidates.filter((_: unknown, i: number) => i !== (det.recommended ?? 0));
-        if (others.length > 0) showAlternates(others);
         setStatus(
           `Detected a ${best.areaM2} m² building from Google roof data (${det.imageryQuality}${det.imageryDate ? ` ${det.imageryDate}` : ""}). ` +
-            (others.length > 0 ? `${others.length} other building${others.length > 1 ? "s" : ""} nearby — click one to switch. ` : "") +
-            `Drag corners to fine-tune, or redraw.`
+            `Drag it to reposition, drag a corner to reshape, or redraw.`
         );
 
         // Google's roof data can lag the live satellite view by years. We used
@@ -493,14 +446,14 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
         <button onClick={startDrawing} disabled={drawing || addingObs} className="rounded bg-amber-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-amber-600 disabled:opacity-50">
-          {drawing ? `Drawing… (${vertices.length} pts)` : polyRef.current ? "Redraw roof" : "Draw roof"}
+          {drawing ? `Drawing… (${vertices.length} pts)` : hasPoly ? "Redraw roof" : "Draw roof"}
         </button>
         <button onClick={detectRoof} disabled={aiBusy || drawing || addingObs} className="rounded border border-amber-500 px-3 py-1.5 text-sm font-semibold text-amber-600 hover:bg-amber-50 disabled:opacity-50">
           {aiBusy ? "Detecting…" : "Detect roof"}
         </button>
         <button
           onClick={() => (addingObs ? cancelObsRef.current?.() : startObstruction())}
-          disabled={drawing || !polyRef.current}
+          disabled={drawing || !hasPoly}
           title="Block out a stairwell, water tank or AC platform — panels keep 200 mm clear of it"
           className="rounded border border-red-400 px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
         >
@@ -514,7 +467,7 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
         {!rectAssume && (
           <button
             onClick={squareUp}
-            disabled={drawing || addingObs || !polyRef.current}
+            disabled={drawing || addingObs || !hasPoly}
             title={`Corners within ${SQUARE_TOLERANCE_DEG}° of square become exactly 90°`}
             className="rounded border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
           >
@@ -522,7 +475,7 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
           </button>
         )}
       </div>
-      {/* one colour = one meaning, so the map never shows two candidate outlines alike */}
+      {/* only two shapes are ever on the map, and one colour means one thing */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
         <span className="flex items-center gap-1.5">
           <span className="inline-block h-2.5 w-4 rounded-sm border-2 border-amber-500 bg-amber-500/10" />
@@ -531,13 +484,7 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
         {obsCount > 0 && (
           <span className="flex items-center gap-1.5">
             <span className="inline-block h-2.5 w-4 rounded-sm border border-red-300 bg-red-600/40" />
-            No-panel zone — drag to move, right-click to remove
-          </span>
-        )}
-        {altCount > 0 && (
-          <span className="flex items-center gap-1.5">
-            <span className="inline-block h-2.5 w-4 rounded-sm border-2 border-slate-300 bg-slate-400/20" />
-            {altCount} other building{altCount > 1 ? "s" : ""} nearby — click one to use it instead
+            No-panel zone — stays put when the roof moves; drag to move, right-click to remove
           </span>
         )}
       </div>
