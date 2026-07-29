@@ -35,6 +35,8 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
   const altShapesRef = useRef<google.maps.Polygon[]>([]);
   const obsShapesRef = useRef<google.maps.Polygon[]>([]);
   const clickListenerRef = useRef<google.maps.MapsEventListener | null>(null);
+  const obsListenerRef = useRef<google.maps.MapsEventListener | null>(null);
+  const cancelObsRef = useRef<(() => void) | null>(null);
   /** the outline exactly as drawn/detected, before the rectangle assumption */
   const rawPolyRef = useRef<LatLng[]>([]);
   /** row direction of the current layout (rad, CCW from east) — obstruction boxes follow it */
@@ -44,6 +46,7 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
   const [status, setStatus] = useState("Click “Detect roof” to find the building automatically, or “Draw roof” to trace it yourself.");
   const [aiBusy, setAiBusy] = useState(false);
   const [altCount, setAltCount] = useState(0);
+  const [hasTrace, setHasTrace] = useState(false);
   const [warn, setWarn] = useState("");
   const [snap, setSnap] = useState(true);
   const [rectAssume, setRectAssume] = useState(true);
@@ -64,7 +67,19 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
     altShapesRef.current.forEach((p) => p.setMap(null));
     altShapesRef.current = [];
     setAltCount(0);
+    setHasTrace(false);
   };
+
+  /**
+   * Shapes on top of the map swallow clicks meant for the map, so every one of
+   * them goes inert while the user is clicking corners for a roof or a keep-out.
+   */
+  const setShapesInert = useCallback((inert: boolean) => {
+    polyRef.current?.setOptions({ clickable: !inert, draggable: !inert, editable: !inert });
+    for (const s of [...obsShapesRef.current, ...altShapesRef.current]) {
+      s.setOptions({ clickable: !inert, draggable: !inert && obsShapesRef.current.includes(s), editable: !inert && obsShapesRef.current.includes(s) });
+    }
+  }, []);
 
   const obstructionPaths = useCallback(
     (): LatLng[][] => obsShapesRef.current.map((s) => s.getPath().getArray().map((v) => ({ lat: v.lat(), lng: v.lng() }))),
@@ -138,6 +153,14 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
     mapRef.current?.setCenter(center);
   }, [center]);
 
+  /** Shift every keep-out box by the same amount, so they ride with the roof. */
+  const shiftObstructions = useCallback((dLat: number, dLng: number) => {
+    for (const s of obsShapesRef.current) {
+      const path = s.getPath();
+      path.forEach((v, i) => path.setAt(i, new google.maps.LatLng(v.lat() + dLat, v.lng() + dLng)));
+    }
+  }, []);
+
   const setPolygonOnMap = useCallback(
     (path: LatLng[]) => {
       polyRef.current?.setMap(null);
@@ -145,6 +168,7 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
         map: mapRef.current!,
         paths: path,
         editable: true,
+        draggable: true,
         fillColor: "#f59e0b",
         fillOpacity: 0.1,
         strokeColor: "#f59e0b",
@@ -156,9 +180,18 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
         commitPolygon(p);
       };
       ["set_at", "insert_at", "remove_at"].forEach((ev) => gp.getPath().addListener(ev, sync));
+      // dragging the whole outline fires no path events, so track it separately
+      let from: google.maps.LatLng | null = null;
+      gp.addListener("dragstart", () => { from = gp.getPath().getAt(0); });
+      gp.addListener("dragend", () => {
+        const to = gp.getPath().getAt(0);
+        if (from) shiftObstructions(to.lat() - from.lat(), to.lng() - from.lng());
+        from = null;
+        sync();
+      });
       sync();
     },
-    [commitPolygon]
+    [commitPolygon, shiftObstructions]
   );
 
   /**
@@ -209,6 +242,7 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
     setWarn("");
     setVertices([]);
     setDrawing(true);
+    setShapesInert(true); // keep-out boxes must not swallow the corner clicks
     setStatus(
       rectRef.current
         ? "Click the roof corners — the outline becomes the tightest rectangle around them. Double-click (or click the first point) to finish."
@@ -227,6 +261,7 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
       markers.forEach((m) => m.setMap(null));
       tempLine?.setMap(null);
       setDrawing(false);
+      setShapesInert(false);
       if (pts.length < 3) return setStatus("Need at least 3 points — try again.");
       // the last corner and the closing corner only exist once the ring is
       // closed, so square the finished outline as a whole
@@ -283,6 +318,7 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
         map: mapRef.current!,
         paths: path,
         editable: true,
+        draggable: true,
         clickable: true,
         fillColor: "#dc2626",
         fillOpacity: 0.35,
@@ -297,6 +333,7 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
         if (gp) commitPolygon(gp.getPath().getArray().map((v) => ({ lat: v.lat(), lng: v.lng() })));
       };
       ["set_at", "insert_at", "remove_at"].forEach((ev) => shape.getPath().addListener(ev, recommit));
+      shape.addListener("dragend", recommit);
       // right-click to delete — left-click is taken by corner editing
       shape.addListener("rightclick", () => {
         shape.setMap(null);
@@ -323,6 +360,7 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
     const gp = polyRef.current;
     if (!map || !gp) return;
     setAddingObs(true);
+    setShapesInert(true);
     setStatus("Click two opposite corners of the obstruction (stairwell, water tank, AC platform…).");
     const origin = toLocalMeters(gp.getPath().getArray().map((v) => ({ lat: v.lat(), lng: v.lng() }))).origin;
     const ang = gridAngleRef.current;
@@ -338,7 +376,18 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
 
     let first: { x: number; y: number } | null = null;
     let marker: google.maps.Marker | null = null;
-    const listener = map.addListener("click", (e: google.maps.MapMouseEvent) => {
+    const done = () => {
+      obsListenerRef.current?.remove();
+      obsListenerRef.current = null;
+      marker?.setMap(null);
+      setShapesInert(false);
+      setAddingObs(false);
+    };
+    cancelObsRef.current = () => {
+      done();
+      setStatus("Obstruction cancelled.");
+    };
+    obsListenerRef.current = map.addListener("click", (e: google.maps.MapMouseEvent) => {
       if (!e.latLng) return;
       const p = toFrame({ lat: e.latLng.lat(), lng: e.latLng.lng() });
       if (!first) {
@@ -352,9 +401,7 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
       }
       const x0 = Math.min(first.x, p.x), x1 = Math.max(first.x, p.x);
       const y0 = Math.min(first.y, p.y), y1 = Math.max(first.y, p.y);
-      listener.remove();
-      marker?.setMap(null);
-      setAddingObs(false);
+      done();
       if (x1 - x0 < 0.3 || y1 - y0 < 0.3) {
         setStatus("That box was too small — try again with two opposite corners.");
         return;
@@ -419,19 +466,21 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
         if (det.stale) {
           const yrs = det.imageryAgeMonths != null ? (det.imageryAgeMonths / 12).toFixed(1) : "?";
           setWarn(
-            `Google's roof data here is from ${det.imageryDate} — ${yrs} years older than the satellite view below. If this building was built or extended since, this outline will be wrong. An AI trace of the current image is shown in amber — click it to use that instead, or redraw manually.`
+            `Google's roof data here is from ${det.imageryDate} — ${yrs} years older than the satellite view below. If this building was built or extended since, this outline will be wrong. A second opinion traced from the current image is outlined in blue — click it to use that instead, or redraw manually.`
           );
           try {
             const zoom = mapRef.current.getZoom() ?? 20;
             const vis = await fetch(`/api/roof-suggest?lat=${c.lat()}&lng=${c.lng()}&zoom=${zoom}`).then((r) => r.json());
             if (vis.polygon?.length >= 3) {
+              // deliberately NOT amber: amber always means "this is the outline
+              // that will be quoted", and only one shape may claim that
               const shape = new google.maps.Polygon({
                 map: mapRef.current!,
                 paths: vis.polygon,
                 clickable: true,
-                fillColor: "#f59e0b",
-                fillOpacity: 0.1,
-                strokeColor: "#f59e0b",
+                fillColor: "#38bdf8",
+                fillOpacity: 0.12,
+                strokeColor: "#38bdf8",
                 strokeWeight: 3,
                 zIndex: 2,
               });
@@ -440,7 +489,7 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
                 setStatus("Switched to the AI trace of the current satellite image — drag corners to fine-tune.");
               });
               altShapesRef.current.push(shape);
-              setAltCount((n) => n + 1);
+              setHasTrace(true);
             }
           } catch {
             // comparison trace is best-effort
@@ -476,12 +525,12 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
           {aiBusy ? "Detecting…" : "Detect roof"}
         </button>
         <button
-          onClick={startObstruction}
-          disabled={drawing || addingObs || !polyRef.current}
+          onClick={() => (addingObs ? cancelObsRef.current?.() : startObstruction())}
+          disabled={drawing || !polyRef.current}
           title="Block out a stairwell, water tank or AC platform — panels keep 200 mm clear of it"
           className="rounded border border-red-400 px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
         >
-          {addingObs ? "Click 2 corners…" : "+ Obstruction"}
+          {addingObs ? "Cancel — click 2 corners" : "+ Obstruction"}
         </button>
         {obsCount > 0 && (
           <button onClick={clearObstructions} className="rounded border border-slate-300 px-2 py-1.5 text-xs font-semibold text-slate-500 hover:bg-slate-50">
@@ -498,9 +547,29 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
             Square corners
           </button>
         )}
+      </div>
+      {/* one colour = one meaning, so the map never shows two candidate outlines alike */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-2.5 w-4 rounded-sm border-2 border-amber-500 bg-amber-500/10" />
+          The roof being quoted — drag it to move, drag a corner to reshape
+        </span>
+        {obsCount > 0 && (
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-2.5 w-4 rounded-sm border border-red-300 bg-red-600/40" />
+            No-panel zone — drag to move, right-click to remove
+          </span>
+        )}
         {altCount > 0 && (
-          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
-            {altCount} other building{altCount > 1 ? "s" : ""} — click to switch
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-2.5 w-4 rounded-sm border-2 border-slate-300 bg-slate-400/20" />
+            {altCount} other building{altCount > 1 ? "s" : ""} nearby — click one to use it instead
+          </span>
+        )}
+        {hasTrace && (
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-2.5 w-4 rounded-sm border-2 border-sky-400 bg-sky-400/15" />
+            AI trace of today&apos;s image — click to use it instead
           </span>
         )}
       </div>
