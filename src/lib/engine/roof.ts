@@ -4,9 +4,12 @@ import type { LatLng, PanelRect, PackingResult } from "./types";
 
 const EARTH_R = 6_371_000;
 
-/** Project lat/lng to local meters around the polygon centroid. */
-export function toLocalMeters(poly: LatLng[]): { pts: { x: number; y: number }[]; origin: LatLng } {
-  const origin = {
+/**
+ * Project lat/lng to local meters around the polygon centroid, or around
+ * `about` when several shapes must share one frame (roof + obstructions).
+ */
+export function toLocalMeters(poly: LatLng[], about?: LatLng): { pts: { x: number; y: number }[]; origin: LatLng } {
+  const origin = about ?? {
     lat: poly.reduce((s, p) => s + p.lat, 0) / poly.length,
     lng: poly.reduce((s, p) => s + p.lng, 0) / poly.length,
   };
@@ -76,6 +79,30 @@ function distToBoundary(px: number, py: number, poly: { x: number; y: number }[]
   return min;
 }
 
+/**
+ * Separation between two convex shapes: >0 = that many metres apart, ≤0 =
+ * overlapping. Separating-axis test over both shapes' edge normals; in the
+ * corner-to-corner case it under-reports slightly, which errs towards keeping
+ * panels away from obstructions.
+ */
+function convexGap(a: { x: number; y: number }[], b: { x: number; y: number }[]): number {
+  let best = -Infinity;
+  for (const shape of [a, b]) {
+    for (let i = 0; i < shape.length; i++) {
+      const j = (i + 1) % shape.length;
+      const ex = shape[j].x - shape[i].x, ey = shape[j].y - shape[i].y;
+      const len = Math.hypot(ex, ey);
+      if (len === 0) continue;
+      const nx = -ey / len, ny = ex / len;
+      const pa = a.map((p) => p.x * nx + p.y * ny);
+      const pb = b.map((p) => p.x * nx + p.y * ny);
+      const gap = Math.max(Math.min(...pb) - Math.max(...pa), Math.min(...pa) - Math.max(...pb));
+      if (gap > best) best = gap;
+    }
+  }
+  return best;
+}
+
 function pointInPolygon(px: number, py: number, poly: { x: number; y: number }[]): boolean {
   let inside = false;
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
@@ -106,14 +133,26 @@ function longestEdgeAngle(pts: { x: number; y: number }[]): number {
  *   • 100 mm between panels within a row (short edge to short edge)
  *   • 400 mm between rows
  * Panel plan depth is length × cos(tilt), so pitched roofs pack slightly tighter.
+ * `obstructions` are keep-out shapes inside the roof (stairwells, water tanks,
+ * AC platforms); the same 200 mm clearance is held around them.
  * The returned layout IS the design: count = panels.length everywhere downstream.
  */
-export function packPanels(roofPolygon: LatLng[], roofType: RoofType, tiltDeg?: number): PackingResult {
+export function packPanels(
+  roofPolygon: LatLng[],
+  roofType: RoofType,
+  tiltDeg?: number,
+  obstructions?: LatLng[][]
+): PackingResult {
   const tilt = tiltDeg ?? DEFAULT_TILT_DEG[roofType];
   const tiltRad = (tilt * Math.PI) / 180;
-  const { pts } = toLocalMeters(roofPolygon);
+  const { pts, origin } = toLocalMeters(roofPolygon);
   const footprintM2 = polygonAreaM2(pts);
   const inset = insetPolygon(pts, PACKING.edgeClearanceM);
+  // keep-outs share the roof's local frame so the two can be compared directly
+  const obs = (obstructions ?? [])
+    .filter((o) => o.length >= 3)
+    .map((o) => toLocalMeters(o, origin).pts);
+  const obstructedM2 = Math.min(footprintM2, obs.reduce((s, o) => s + polygonAreaM2(o), 0));
 
   const panelW = PANEL.widthM; // short edge — runs across the row
   const planDepth = PANEL.lengthM * Math.cos(tiltRad); // up-slope footprint
@@ -138,7 +177,9 @@ export function packPanels(roofPolygon: LatLng[], roofType: RoofType, tiltDeg?: 
   // Work in the row-aligned frame: rotation preserves distances, so the edge
   // clearance can be enforced exactly against the real (un-inset) outline.
   const cosA = Math.cos(-ang), sinA = Math.sin(-ang);
-  const rot = pts.map((p) => ({ x: p.x * cosA - p.y * sinA, y: p.x * sinA + p.y * cosA }));
+  const toFrame = (p: { x: number; y: number }) => ({ x: p.x * cosA - p.y * sinA, y: p.x * sinA + p.y * cosA });
+  const rot = pts.map(toFrame);
+  const obsRot = obs.map((o) => o.map(toFrame));
   const minX = Math.min(...rot.map((p) => p.x)), maxX = Math.max(...rot.map((p) => p.x));
   const minY = Math.min(...rot.map((p) => p.y)), maxY = Math.max(...rot.map((p) => p.y));
   const clear = PACKING.edgeClearanceM;
@@ -158,6 +199,11 @@ export function packPanels(roofPolygon: LatLng[], roofType: RoofType, tiltDeg?: 
       );
       // guard the concave case: a roof vertex poking into the panel between corners
       if (ok) ok = !rot.some((v) => v.x > x0 && v.x < x1 && v.y > y0 && v.y < y1);
+      // and hold the same clearance around every keep-out shape
+      if (ok && obsRot.length > 0) {
+        const rect = [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
+        ok = obsRot.every((o) => convexGap(rect, o) >= clear);
+      }
       if (ok) {
         panels.push({
           x: x * cosB - y * sinB,
@@ -175,7 +221,8 @@ export function packPanels(roofPolygon: LatLng[], roofType: RoofType, tiltDeg?: 
     panels,
     count: panels.length,
     footprintM2,
-    usableM2: polygonAreaM2(inset),
+    obstructedM2,
+    usableM2: Math.max(0, polygonAreaM2(inset) - obstructedM2),
     maxKw: (panels.length * PANEL.watt) / 1000,
     rowAxisDeg: ((90 - (ang * 180) / Math.PI) % 360 + 360) % 360,
     azimuthDeg,

@@ -37,7 +37,8 @@ function computeOverlay(result: ProposalResult): { overlay: OverlayGeom; center:
       return pixelInImage(ll, c, zoom, W, H);
     });
   });
-  return { overlay: { w: W, h: H, outline, panels }, center: c, zoom };
+  const blocked = (result.site.obstructions ?? []).map((o) => o.map((p) => pixelInImage(p, c, zoom, W, H)));
+  return { overlay: { w: W, h: H, outline, panels, blocked }, center: c, zoom };
 }
 
 async function toDataUri(buf: Buffer | null, mime: string): Promise<string | undefined> {

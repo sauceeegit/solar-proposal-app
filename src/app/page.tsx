@@ -37,6 +37,7 @@ export default function Home() {
 
   // step 2
   const [polygon, setPolygon] = useState<LatLng[]>([]);
+  const [obstructions, setObstructions] = useState<LatLng[][]>([]);
   const [packing, setPacking] = useState<PackingResult | null>(null);
   const [roofConfirmed, setRoofConfirmed] = useState(false);
   const [roofCheck, setRoofCheck] = useState<RoofCheck | null>(null);
@@ -71,8 +72,9 @@ export default function Home() {
     }
   };
 
-  const onPolygonChange = useCallback((poly: LatLng[], pack: PackingResult | null) => {
+  const onPolygonChange = useCallback((poly: LatLng[], pack: PackingResult | null, obs: LatLng[][]) => {
     setPolygon(poly);
+    setObstructions(obs);
     setPacking(pack);
     setRoofConfirmed(false); // any change to the outline requires re-verification
     setRoofCheck(null); // and invalidates the Solar API cross-check
@@ -129,6 +131,7 @@ export default function Home() {
             roofType,
             phase: effectivePhase,
             roofPolygon: polygon,
+            obstructions,
             floors: floors ? parseInt(floors) : 1,
             monthlyBillTHB: bill ? parseFloat(bill) : undefined,
             tariffTHBPerKwh: effectiveTariff,
@@ -299,8 +302,12 @@ export default function Home() {
               />
               <span className="text-slate-700">
                 <b>I&apos;ve verified the roof outline.</b> The orange polygon matches the actual building footprint (
-                {Math.round(packing.footprintM2)} m², {packing.count} panels max). Drag the corners to correct it, or redraw —
-                the AI suggestion is only a starting point.
+                {Math.round(packing.footprintM2)} m², {packing.count} panels max)
+                {packing.obstructedM2 > 0 &&
+                  (obstructions.length > 1
+                    ? `, and the ${obstructions.length} red boxes cover every rooftop obstruction (${Math.round(packing.obstructedM2)} m²)`
+                    : `, and the red box covers every rooftop obstruction (${Math.round(packing.obstructedM2)} m²)`)}
+                . Drag the corners to correct it, or redraw — the AI suggestion is only a starting point.
               </span>
             </label>
           )}

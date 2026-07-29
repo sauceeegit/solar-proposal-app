@@ -16,6 +16,8 @@ export interface OverlayGeom {
   h: number;
   outline: { x: number; y: number }[];
   panels: { x: number; y: number }[][];
+  /** rooftop keep-outs, drawn under the panels */
+  blocked?: { x: number; y: number }[][];
 }
 export interface PdfImages {
   mapDataUri?: string;
@@ -138,6 +140,9 @@ function ProposalDoc({ result, narrative, images, overlay, createdAt }: {
               <Image src={images.mapDataUri} style={{ width: overlay.w, height: overlay.h, borderRadius: 8 }} />
               <Svg style={{ position: "absolute", top: 0, left: 0 }} width={overlay.w} height={overlay.h} viewBox={`0 0 ${overlay.w} ${overlay.h}`}>
                 <Polygon points={pts(overlay.outline)} fill="none" stroke={AMBER} strokeWidth={2} />
+                {(overlay.blocked ?? []).map((p, i) => (
+                  <Polygon key={`b${i}`} points={pts(p)} fill="#dc2626" fillOpacity={0.3} stroke="#fecaca" strokeWidth={1} />
+                ))}
                 {overlay.panels.map((p, i) => (
                   <Polygon key={i} points={pts(p)} fill={NAVY} fillOpacity={0.9} stroke="#7fb2ff" strokeWidth={0.5} />
                 ))}

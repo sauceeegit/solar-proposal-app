@@ -150,7 +150,7 @@ function makeScenario(
 }
 
 export function optimize(site: SiteInput, mode: OptimizationMode = "max-savings"): ProposalResult {
-  const packing: PackingResult = packPanels(site.roofPolygon, site.roofType, site.tiltDeg);
+  const packing: PackingResult = packPanels(site.roofPolygon, site.roofType, site.tiltDeg, site.obstructions);
   const minPanels = Math.ceil((SYSTEM.minKw * 1000) / PANEL.watt);
   const counts: number[] = [];
   for (let c = minPanels; c <= packing.count; c++) counts.push(c);
@@ -161,6 +161,13 @@ export function optimize(site: SiteInput, mode: OptimizationMode = "max-savings"
       ? `Roof treated as flat (default assumption) with ${site.tiltDeg}° tilted racking; confirm at site survey.`
       : `Roof type: ${site.roofType === "tilted-one" ? "tilted (one side)" : "tilted (both sides)"} at ~${site.tiltDeg}° tilt.`,
     "Panel layout: 200 mm clearance from all roof edges, 100 mm between panels within a row, 400 mm between rows.",
+    ...(packing.obstructedM2 > 0
+      ? [
+          (site.obstructions ?? []).length === 1
+            ? `One rooftop obstruction of ~${Math.round(packing.obstructedM2)} m² is kept clear of panels, with the same 200 mm clearance around it.`
+            : `${(site.obstructions ?? []).length} rooftop obstructions totalling ~${Math.round(packing.obstructedM2)} m² are kept clear of panels, with the same 200 mm clearance around each.`,
+        ]
+      : []),
     `Panels face azimuth ${Math.round(site.azimuthDeg)}° (roof edge direction closest to south).`,
     "Roof material assumed standard; structural check pending site survey.",
     site.shadingFactor != null

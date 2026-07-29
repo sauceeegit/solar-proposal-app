@@ -16,6 +16,8 @@ export interface SiteInput {
   roofType: RoofType;
   phase: Phase;
   roofPolygon: LatLng[]; // confirmed by the user
+  /** keep-out shapes inside the roof (stairwell, water tank, AC platform…) */
+  obstructions?: LatLng[][];
   floors: number;
   monthlyBillTHB?: number; // optional — decides Output A vs B
   tariffTHBPerKwh: number;
@@ -41,6 +43,7 @@ export interface PackingResult {
   panels: PanelRect[];
   count: number;
   footprintM2: number;
+  obstructedM2: number; // area blocked out by keep-out shapes
   usableM2: number;
   maxKw: number;
   rowAxisDeg: number; // orientation of rows (deg from north, clockwise)

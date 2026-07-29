@@ -26,6 +26,7 @@ function PanelOverlay({ result }: { result: ProposalResult }) {
   const { origin } = toLocalMeters(poly);
 
   const outline = poly.map((p) => pixelInImage(p, c, zoom, IMG_W, IMG_H));
+  const blocked = (result.site.obstructions ?? []).map((o) => o.map((p) => pixelInImage(p, c, zoom, IMG_W, IMG_H)));
   const panelPolys = result.packing.panels.map((p) => {
     const rot = (p.rotDeg * Math.PI) / 180;
     const cos = Math.cos(rot), sin = Math.sin(rot);
@@ -43,6 +44,9 @@ function PanelOverlay({ result }: { result: ProposalResult }) {
       <img src={`/api/staticmap?lat=${c.lat}&lng=${c.lng}&zoom=${zoom}&w=${IMG_W}&h=${IMG_H}`} alt="Roof top view" width={IMG_W} height={IMG_H} className="block w-full" />
       <svg viewBox={`0 0 ${IMG_W} ${IMG_H}`} className="absolute inset-0 h-full w-full">
         <polygon points={outline.map((p) => `${p.x},${p.y}`).join(" ")} fill="none" stroke="#f59e0b" strokeWidth="2" />
+        {blocked.map((corners, i) => (
+          <polygon key={`b${i}`} points={corners.map((p) => `${p.x},${p.y}`).join(" ")} fill="#dc2626" fillOpacity="0.3" stroke="#fecaca" strokeWidth="1" />
+        ))}
         {panelPolys.map((corners, i) => (
           <polygon key={i} points={corners.map((p) => `${p.x},${p.y}`).join(" ")} fill="#0f2c56" fillOpacity="0.9" stroke="#7fb2ff" strokeWidth="0.5" />
         ))}
