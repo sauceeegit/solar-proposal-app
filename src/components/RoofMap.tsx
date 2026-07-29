@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { importLibrary, setOptions } from "@googlemaps/js-api-loader";
 import { fitRectangle, rectangleOvershoot } from "@/lib/engine/rect";
-import { packPanels, toLocalMeters } from "@/lib/engine/roof";
+import { packPanels, polygonAreaM2, toLocalMeters } from "@/lib/engine/roof";
 import { SQUARE_TOLERANCE_DEG, snapRightAngles, squareNextPoint } from "@/lib/engine/snap";
 import type { LatLng, PackingResult } from "@/lib/engine/types";
 import type { RoofType } from "@/config/assumptions";
@@ -38,8 +38,6 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
   const cancelObsRef = useRef<(() => void) | null>(null);
   /** the outline exactly as drawn/detected, before the rectangle assumption */
   const rawPolyRef = useRef<LatLng[]>([]);
-  /** row direction of the current layout (rad, CCW from east) — obstruction boxes follow it */
-  const gridAngleRef = useRef(0);
   const [drawing, setDrawing] = useState(false);
   const [vertices, setVertices] = useState<LatLng[]>([]);
   const [status, setStatus] = useState("Click “Detect roof” to find the building automatically, or “Draw roof” to trace it yourself.");
@@ -49,6 +47,7 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
   const [rectAssume, setRectAssume] = useState(true);
   const [obsCount, setObsCount] = useState(0);
   const [addingObs, setAddingObs] = useState(false);
+  const [obsPts, setObsPts] = useState(0);
   /** mirrors polyRef for rendering — a ref read during render can be stale */
   const [hasPoly, setHasPoly] = useState(false);
   // the drawing listeners are created once, so they read the toggles from refs
@@ -83,7 +82,6 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
       if (poly.length < 3) return null;
       const obstructions = obstructionPaths();
       const packing = packPanels(poly, roofType, undefined, obstructions);
-      gridAngleRef.current = ((90 - packing.rowAxisDeg) * Math.PI) / 180;
       const { origin } = toLocalMeters(poly);
       const map = mapRef.current!;
       for (const p of packing.panels) {
@@ -336,31 +334,23 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
   /** Two clicks give opposite corners; the box is aligned to the panel rows. */
   const startObstruction = () => {
     const map = mapRef.current;
-    const gp = polyRef.current;
-    if (!map || !gp) return;
+    if (!map || !polyRef.current) return;
     setAddingObs(true);
+    setObsPts(0);
     setShapesInert(true);
-    setStatus("Click two opposite corners of the obstruction (stairwell, water tank, AC platform…).");
-    const origin = toLocalMeters(gp.getPath().getArray().map((v) => ({ lat: v.lat(), lng: v.lng() }))).origin;
-    const ang = gridAngleRef.current;
-    const cosA = Math.cos(-ang), sinA = Math.sin(-ang);
-    const toFrame = (ll: LatLng) => {
-      const cosLat = Math.cos((origin.lat * Math.PI) / 180);
-      const x = ((ll.lng - origin.lng) * Math.PI / 180) * EARTH_R * cosLat;
-      const y = ((ll.lat - origin.lat) * Math.PI / 180) * EARTH_R;
-      return { x: x * cosA - y * sinA, y: x * sinA + y * cosA };
-    };
-    const fromFrame = (x: number, y: number) =>
-      metersToLatLng(origin, x * Math.cos(ang) - y * Math.sin(ang), x * Math.sin(ang) + y * Math.cos(ang));
+    setStatus("Click the 4 corners of the obstruction (stairwell, water tank, AC platform…) — it snaps to a rectangle.");
 
-    let first: { x: number; y: number } | null = null;
-    let marker: google.maps.Marker | null = null;
+    const pts: LatLng[] = [];
+    const markers: google.maps.Marker[] = [];
+    let outline: google.maps.Polyline | null = null;
     const done = () => {
       obsListenerRef.current?.remove();
       obsListenerRef.current = null;
-      marker?.setMap(null);
+      markers.forEach((m) => m.setMap(null));
+      outline?.setMap(null);
       setShapesInert(false);
       setAddingObs(false);
+      setObsPts(0);
     };
     cancelObsRef.current = () => {
       done();
@@ -368,24 +358,31 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
     };
     obsListenerRef.current = map.addListener("click", (e: google.maps.MapMouseEvent) => {
       if (!e.latLng) return;
-      const p = toFrame({ lat: e.latLng.lat(), lng: e.latLng.lng() });
-      if (!first) {
-        first = p;
-        marker = new google.maps.Marker({
+      const p = { lat: e.latLng.lat(), lng: e.latLng.lng() };
+      pts.push(p);
+      setObsPts(pts.length);
+      markers.push(
+        new google.maps.Marker({
           map,
-          position: { lat: e.latLng.lat(), lng: e.latLng.lng() },
+          position: p,
           icon: { path: google.maps.SymbolPath.CIRCLE, scale: 4, fillColor: "#dc2626", fillOpacity: 1, strokeWeight: 1 },
-        });
+        })
+      );
+      outline?.setMap(null);
+      outline = new google.maps.Polyline({ map, path: pts, strokeColor: "#dc2626", strokeWeight: 2 });
+      if (pts.length < 4) {
+        setStatus(`Corner ${pts.length} of 4 — keep clicking round the obstruction.`);
         return;
       }
-      const x0 = Math.min(first.x, p.x), x1 = Math.max(first.x, p.x);
-      const y0 = Math.min(first.y, p.y), y1 = Math.max(first.y, p.y);
+      // the four corners are traced by hand, so square them off the same way
+      // the roof outline is: the tightest rectangle that contains them
+      const rect = fitRectangle(pts);
       done();
-      if (x1 - x0 < 0.3 || y1 - y0 < 0.3) {
-        setStatus("That box was too small — try again with two opposite corners.");
+      if (polygonAreaM2(toLocalMeters(rect).pts) < 0.1) {
+        setStatus("Those corners were too close together — try again.");
         return;
       }
-      addObstructionShape([fromFrame(x0, y0), fromFrame(x1, y0), fromFrame(x1, y1), fromFrame(x0, y1)]);
+      addObstructionShape(rect);
     });
   };
 
@@ -457,7 +454,7 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
           title="Block out a stairwell, water tank or AC platform — panels keep 200 mm clear of it"
           className="rounded border border-red-400 px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
         >
-          {addingObs ? "Cancel — click 2 corners" : "+ Obstruction"}
+          {addingObs ? `Cancel — ${obsPts}/4 corners` : "+ Obstruction"}
         </button>
         {obsCount > 0 && (
           <button onClick={clearObstructions} className="rounded border border-slate-300 px-2 py-1.5 text-xs font-semibold text-slate-500 hover:bg-slate-50">
@@ -484,7 +481,7 @@ export default function RoofMap({ center, roofType, onPolygonChange }: Props) {
         {obsCount > 0 && (
           <span className="flex items-center gap-1.5">
             <span className="inline-block h-2.5 w-4 rounded-sm border border-red-300 bg-red-600/40" />
-            No-panel zone — stays put when the roof moves; drag to move, right-click to remove
+              No-panel zone — stays put when the roof moves; drag to move, right-click to remove
           </span>
         )}
       </div>
