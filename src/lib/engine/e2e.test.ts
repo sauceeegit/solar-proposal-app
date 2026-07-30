@@ -64,7 +64,8 @@ describe("E2E: Golden Paradise Hotel via live server", () => {
     // 3. real optimizer
     const result = optimize(site, "max-savings");
     expect(result.outputType).toBe("B");
-    expect(result.scenarios).toHaveLength(2);
+    // commercial → one scenario, the whole roof
+    expect(result.scenarios).toHaveLength(1);
     const rec = result.scenarios[0].options[0];
     console.log("Recommended:", rec.label, "→", rec.priceTHB, "THB, payback", rec.paybackYears, "yrs");
     console.log("Roof fits", result.packing.count, "panels =", result.packing.maxKw, "kWp");
@@ -76,8 +77,8 @@ describe("E2E: Golden Paradise Hotel via live server", () => {
         expect(o.inverter.approvedPEA).toBe(true);
         expect(o.paybackYears).not.toBeNull();
       }
-    // scenario 2 = full roof
-    expect(result.scenarios[1].options[0].panelCount).toBe(result.packing.count);
+    // the quoted system IS the full roof
+    expect(rec.panelCount).toBe(result.packing.count);
 
     // 4. persist via real API
     const post = await fetch(`${BASE}/api/proposal`, {

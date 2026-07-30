@@ -4,7 +4,8 @@ import { annualLoadFromBill, annualLoadFromEUI, daytimeLoadShare, hourlyLoadFrac
 import { isExportEligible, simulateFlows } from "./battery";
 import { computeEconomics } from "./economics";
 import { utilityForProvince } from "./utility";
-import { optimize } from "./optimizer";
+import { EXPORT_CAP_PANELS, optimize } from "./optimizer";
+import { EXPORT } from "@/config/assumptions";
 import type { SiteInput } from "./types";
 
 // ~30m × 20m rectangle near Phuket (7.8376 N, 98.2997 E)
@@ -231,9 +232,10 @@ describe("utility lookup", () => {
 describe("optimizer end-to-end (hotel, Output B)", () => {
   const result = optimize(hotelSite, "max-savings");
 
-  it("produces Output B with 2 scenarios × 2 options", () => {
+  it("gives a commercial building one scenario: the whole roof", () => {
     expect(result.outputType).toBe("B");
-    expect(result.scenarios).toHaveLength(2);
+    expect(result.scenarios).toHaveLength(1);
+    expect(result.scenarios[0].options[0].panelCount).toBe(result.packing.count);
     for (const s of result.scenarios) {
       expect(s.options.length).toBeGreaterThanOrEqual(1);
       expect(s.options.length).toBeLessThanOrEqual(2);
@@ -259,9 +261,49 @@ describe("optimizer end-to-end (hotel, Output B)", () => {
     }
   });
 
-  it("scenario 2 uses the full roof", () => {
-    const s2 = result.scenarios[1];
-    expect(s2.options[0].panelCount).toBe(result.packing.count);
+  it("residential gets the full roof plus an export-eligible alternative", () => {
+    const home = optimize({ ...hotelSite, use: "residential", phase: "single" }, "max-savings");
+    expect(home.scenarios).toHaveLength(2);
+    expect(home.scenarios[0].options[0].panelCount).toBe(home.packing.count);
+    // 22 × 450 W = 9.9 kW, just under the 10 kW export ceiling
+    expect(EXPORT_CAP_PANELS).toBe(22);
+    for (const o of home.scenarios[1].options) {
+      expect(o.panelCount).toBe(EXPORT_CAP_PANELS);
+      expect(o.dcKw).toBeLessThanOrEqual(EXPORT.maxSystemKw);
+      expect(isExportEligible("residential", o.dcKw)).toBe(true);
+    }
+  });
+
+  it("the full-roof residential option is too big to earn the export credit", () => {
+    const home = optimize({ ...hotelSite, use: "residential", phase: "single" }, "max-savings");
+    // the point of showing the smaller one: only it can be paid for surplus
+    expect(home.packing.count).toBeGreaterThan(EXPORT_CAP_PANELS);
+    expect(isExportEligible("residential", home.scenarios[0].options[0].dcKw)).toBe(false);
+    expect(isExportEligible("residential", home.scenarios[1].options[0].dcKw)).toBe(true);
+  });
+
+  it("an export-eligible home with surplus actually gets paid for it", () => {
+    // a modest house: one floor, so production outruns daytime load
+    const home = optimize({ ...hotelSite, use: "residential", phase: "single", floors: 1 }, "max-savings");
+    const small = home.scenarios[1].options[0];
+    expect(small.panelCount).toBe(EXPORT_CAP_PANELS);
+    expect(small.flows.exportedKwh).toBeGreaterThan(0);
+    // and the full roof, being over the ceiling, is not paid for its surplus
+    expect(home.scenarios[0].options[0].flows.exportedKwh).toBe(0);
+  });
+
+  it("skips the second scenario when the whole roof is already export-eligible", () => {
+    // a roof only big enough for a handful of panels
+    const small = [
+      { lat: lat0, lng: lng0 },
+      { lat: lat0, lng: lng0 + dLng / 4 },
+      { lat: lat0 + dLat / 4, lng: lng0 + dLng / 4 },
+      { lat: lat0 + dLat / 4, lng: lng0 },
+    ];
+    const home = optimize({ ...hotelSite, use: "residential", phase: "single", roofPolygon: small }, "max-savings");
+    expect(home.packing.count).toBeLessThanOrEqual(EXPORT_CAP_PANELS);
+    expect(home.scenarios).toHaveLength(1);
+    expect(home.assumptionNotes.some((n) => /already within the 10 kW export ceiling/.test(n))).toBe(true);
   });
 
   it("reports measured shading when Solar API provided it, else the assumption", () => {

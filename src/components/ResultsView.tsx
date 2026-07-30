@@ -58,7 +58,9 @@ export default function ResultsView({
     () => roof3dFromPolygon(result.site.roofPolygon, result.site.obstructions),
     [result.site.roofPolygon, result.site.obstructions]
   );
-  const recommendedCount = result.scenarios[0]?.options[0]?.panelCount ?? result.packing.count;
+  // the 3D always shows the roof filled — not the smaller export-eligible
+  // option — so it reads as "here is everything this roof can take"
+  const maxPanels = result.packing.count;
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState("");
   const [saveErr, setSaveErr] = useState("");
@@ -137,9 +139,10 @@ export default function ResultsView({
       {roof3d && (
         <div className="space-y-2">
           <h3 className="font-bold text-slate-900">
-            3D preview <span className="text-sm font-normal text-slate-500">— check this before generating the proposal; it is what the customer will see</span>
+            3D preview — full roof, {maxPanels} panels ({result.packing.maxKw.toFixed(1)} kWp)
+            <span className="text-sm font-normal text-slate-500"> — check this before generating the proposal; it is what the customer will see</span>
           </h3>
-          <Roof3D roof={roof3d} panelCount={recommendedCount} tilted={result.site.roofType === "flat"} />
+          <Roof3D roof={roof3d} panelCount={maxPanels} tilted={result.site.roofType === "flat"} />
         </div>
       )}
 

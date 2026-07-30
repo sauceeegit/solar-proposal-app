@@ -1,5 +1,5 @@
 // ── System optimizer: Output A / B, 4 modes (spec §5.3, §6) ───────────
-import { PANEL, SYSTEM } from "@/config/assumptions";
+import { EXPORT, PANEL, SYSTEM } from "@/config/assumptions";
 import { BATTERY_SIZES_KWH as BATTERY_SIZES, INVERTERS, batteryPrice, solarSystemPrice, type InverterModel } from "@/config/pricing";
 import { annualLoadFromBill, annualLoadFromEUI, daytimeLoadShare } from "./load";
 import { isExportEligible, simulateFlows } from "./battery";
@@ -120,6 +120,13 @@ function rationaleFor(o: SystemOption, alt: SystemOption | null, site: SiteInput
   return parts.join(" ");
 }
 
+/**
+ * Largest system that still earns the export credit — 22 panels at 450 W is
+ * 9.9 kW, just under the 10 kW ceiling. Derived, not hard-coded, so it stays
+ * right if the panel wattage or the ceiling ever moves.
+ */
+export const EXPORT_CAP_PANELS = Math.floor((EXPORT.maxSystemKw * 1000) / PANEL.watt);
+
 function makeScenario(
   name: string,
   description: string,
@@ -151,10 +158,6 @@ function makeScenario(
 
 export function optimize(site: SiteInput, mode: OptimizationMode = "max-savings"): ProposalResult {
   const packing: PackingResult = packPanels(site.roofPolygon, site.roofType, site.tiltDeg, site.obstructions);
-  const minPanels = Math.ceil((SYSTEM.minKw * 1000) / PANEL.watt);
-  const counts: number[] = [];
-  for (let c = minPanels; c <= packing.count; c++) counts.push(c);
-  if (counts.length === 0 && packing.count >= 1) counts.push(packing.count);
 
   const notes: string[] = [
     site.roofType === "flat"
@@ -176,22 +179,51 @@ export function optimize(site: SiteInput, mode: OptimizationMode = "max-savings"
     `Prices last reviewed 2026-07-12; final price subject to site survey.`,
   ];
 
-  const scenarios: Scenario[] = [];
-  let outputType: "A" | "B";
+  // Consumption comes from the bill when there is one, otherwise from the
+  // building type and size. That is what Output A vs B means; it is separate
+  // from how the system is sized below.
+  const billed = !!site.monthlyBillTHB && site.monthlyBillTHB > 0;
+  const outputType: "A" | "B" = billed ? "A" : "B";
+  const load = billed
+    ? annualLoadFromBill(site.monthlyBillTHB!, site.tariffTHBPerKwh)
+    : annualLoadFromEUI(site.use, packing.footprintM2, site.floors);
+  notes.push(
+    billed
+      ? `Annual consumption derived from your ฿${site.monthlyBillTHB!.toLocaleString()}/month bill.`
+      : `Energy use estimated from building type (${site.use}), ${Math.round(packing.footprintM2)} m² footprint × ${site.floors} floor(s) — no bill provided.`
+  );
 
-  if (site.monthlyBillTHB && site.monthlyBillTHB > 0) {
-    outputType = "A";
-    const load = annualLoadFromBill(site.monthlyBillTHB, site.tariffTHBPerKwh);
-    scenarios.push(makeScenario("Based on your electricity bill", `Annual consumption derived from your ฿${site.monthlyBillTHB.toLocaleString()}/month bill.`, load, counts, site, mode));
-  } else {
-    outputType = "B";
-    const load = annualLoadFromEUI(site.use, packing.footprintM2, site.floors);
-    notes.push(`Energy use estimated from building type and size (no bill provided).`);
+  // Every proposal leads with the whole roof. Commercial buildings stop there:
+  // they consume far more than the roof can generate and earn no export credit,
+  // so more panels is simply more saving.
+  const scenarios: Scenario[] = [
+    makeScenario(
+      "Maximum roof utilization",
+      `The largest system this roof allows — ${packing.count} panels (${packing.maxKw.toFixed(1)} kWp).`,
+      load,
+      [packing.count],
+      site,
+      "max-roof"
+    ),
+  ];
+
+  // Residential gets a second, smaller option: the biggest system that still
+  // sits under the export ceiling, so surplus is paid for instead of dumped.
+  const exportKw = (EXPORT_CAP_PANELS * PANEL.watt) / 1000;
+  if (site.use === "residential" && EXPORT_CAP_PANELS < packing.count) {
     scenarios.push(
-      makeScenario("Scenario 1 — estimated consumption", `Assumed usage from building type (${site.use}), ${Math.round(packing.footprintM2)} m² footprint × ${site.floors} floor(s).`, load, counts, site, mode)
+      makeScenario(
+        `Export-eligible system — ${EXPORT_CAP_PANELS} panels`,
+        `${EXPORT_CAP_PANELS} panels (${exportKw.toFixed(2)} kWp), the largest system that stays under the ${EXPORT.maxSystemKw} kW ceiling for the ฿${EXPORT.rateTHB}/kWh export credit.`,
+        load,
+        [EXPORT_CAP_PANELS],
+        site,
+        mode
+      )
     );
-    scenarios.push(
-      makeScenario("Scenario 2 — maximum roof utilization", `The largest system the roof allows (${packing.count} panels), evaluated against the same assumed usage pattern.`, load, [packing.count], site, "max-roof")
+  } else if (site.use === "residential") {
+    notes.push(
+      `This roof holds ${packing.count} panels (${packing.maxKw.toFixed(1)} kWp), already within the ${EXPORT.maxSystemKw} kW export ceiling, so no smaller alternative is shown.`
     );
   }
 

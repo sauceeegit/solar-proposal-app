@@ -232,12 +232,13 @@ export default async function ProposalPage(props: { params: Promise<{ id: string
       {/* ── 3D view, driven by the same traced outline ── */}
       {roof3d && (
         <section className="mb-8">
-          <h2 className="mb-3 text-lg font-black text-slate-900">See it in 3D</h2>
-          <Roof3D
-            roof={roof3d}
-            panelCount={recommended?.panelCount ?? result.packing.count}
-            tilted={result.site.roofType === "flat"}
-          />
+          <h2 className="mb-1 text-lg font-black text-slate-900">See it in 3D</h2>
+          <p className="mb-3 text-xs text-slate-400">
+            The roof at full capacity — {result.packing.count} panels ({result.packing.maxKw.toFixed(1)} kWp).
+            {result.scenarios.length > 1 && " Smaller systems above use the same layout, with fewer rows."}
+          </p>
+          {/* always the full roof, so the 3D shows what the building can take */}
+          <Roof3D roof={roof3d} panelCount={result.packing.count} tilted={result.site.roofType === "flat"} />
         </section>
       )}
 
