@@ -12,7 +12,10 @@ import { NextResponse } from "next/server";
  */
 const SOURCE = "https://sauceeegit.github.io/solvio-panel-3d/rooftop.html";
 
-export const revalidate = 3600; // an hour is plenty; the model changes rarely
+// Short on purpose: the model is edited in its own repo, and an hour-long cache
+// makes a fix pushed there look like it did not work. A minute keeps iteration
+// tight, and stale-while-revalidate means viewers never wait for the refetch.
+export const revalidate = 60;
 
 export async function GET() {
   try {
@@ -22,7 +25,7 @@ export async function GET() {
     return new NextResponse(html, {
       headers: {
         "content-type": "text/html; charset=utf-8",
-        "cache-control": "public, max-age=0, s-maxage=3600, stale-while-revalidate=86400",
+        "cache-control": "public, max-age=0, s-maxage=60, stale-while-revalidate=300",
       },
     });
   } catch (e) {
