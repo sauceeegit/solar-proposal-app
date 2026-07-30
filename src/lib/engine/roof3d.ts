@@ -20,6 +20,8 @@ export interface Roof3D {
    * panels north-up and they run diagonally across the roof.
    */
   offAxisDeg: number;
+  /** keep-out shapes, normalised against the SAME box as `outline` */
+  obstructions: [number, number][][];
 }
 
 const r4 = (n: number) => Math.round(n * 1e4) / 1e4;
@@ -44,18 +46,34 @@ function longestEdgeOffAxisDeg(pts: { x: number; y: number }[]): number {
  * Convert a confirmed roof polygon into the payload `solvioSetRoof` expects.
  * Returns null for a degenerate outline (nothing sensible to show in 3D).
  */
-export function roof3dFromPolygon(poly: LatLng[]): Roof3D | null {
+export function roof3dFromPolygon(poly: LatLng[], obstructions?: LatLng[][]): Roof3D | null {
   if (poly.length < 3) return null;
-  const { pts } = toLocalMeters(poly); // x = metres east, y = metres north
+  const { pts, origin } = toLocalMeters(poly); // x = metres east, y = metres north
   const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   const minY = Math.min(...ys), maxY = Math.max(...ys);
   const widthM = maxX - minX, lengthM = maxY - minY;
   if (!(widthM > 0.5) || !(lengthM > 0.5)) return null;
+  const norm = (p: { x: number; y: number }) =>
+    [r4((p.x - minX) / widthM), r4((p.y - minY) / lengthM)] as [number, number];
+
+  // Keep-outs must share the roof's frame and be normalised against the roof's
+  // box, not their own — the model maps both through the same widthM × lengthM.
+  const keepOuts = (obstructions ?? [])
+    .filter((o) => o.length >= 3)
+    .map((o) => toLocalMeters(o, origin).pts.map(norm))
+    // a keep-out whose centre falls outside the roof would float in mid-air
+    .filter((uv) => {
+      const cu = uv.reduce((s, [u]) => s + u, 0) / uv.length;
+      const cv = uv.reduce((s, [, v]) => s + v, 0) / uv.length;
+      return cu >= 0 && cu <= 1 && cv >= 0 && cv <= 1;
+    });
+
   return {
-    outline: pts.map((p) => [r4((p.x - minX) / widthM), r4((p.y - minY) / lengthM)] as [number, number]),
+    outline: pts.map(norm),
     widthM: Math.round(widthM * 100) / 100,
     lengthM: Math.round(lengthM * 100) / 100,
     offAxisDeg: longestEdgeOffAxisDeg(pts),
+    obstructions: keepOuts,
   };
 }

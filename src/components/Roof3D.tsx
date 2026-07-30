@@ -7,11 +7,14 @@ interface Props {
   roof: RoofGeom;
   /** panels in the quoted design — the model clamps to what its own layout fits */
   panelCount: number;
+  /** raise the panels on racking; false only for a roof that is already sloped */
+  tilted?: boolean;
 }
 
 /** window shape the 3D model exposes on its own document. */
 interface ModelWindow extends Window {
   solvioSetRoof?: (o: { outline: [number, number][]; width: number; length: number }) => unknown;
+  solvioSetObstructions?: (list: [number, number][][]) => unknown;
   solvioSetConfig?: (c: { modules?: number; panel?: string }) => unknown;
 }
 
@@ -35,7 +38,19 @@ function selectAngledLayout(win: ModelWindow): boolean {
   return !!btn.textContent?.includes("Angled");
 }
 
-export default function Roof3D({ roof, panelCount }: Props) {
+/**
+ * The model opens with the panels lying flat on the deck. On a flat roof they
+ * are actually raised on racking, which is what the yield figures assume, so
+ * turn tilt on. Its toggle is a button too.
+ */
+function setTilt(win: ModelWindow, on: boolean): void {
+  const btn = win.document.getElementById("tiltBtn");
+  if (!btn) return;
+  const isTilted = () => !!btn.textContent?.includes("Tilt");
+  if (isTilted() !== on) btn.click();
+}
+
+export default function Roof3D({ roof, panelCount, tilted = true }: Props) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const appliedRef = useRef(false);
   const [failed, setFailed] = useState(false);
@@ -51,8 +66,11 @@ export default function Roof3D({ roof, panelCount }: Props) {
     if (!win?.solvioSetRoof) return;
     try {
       win.solvioSetRoof({ outline: roof.outline, width: roof.widthM, length: roof.lengthM });
-      // rows must follow the roof edges, so pick the layout before the count —
-      // switching mode re-caps the maximum the roof can hold
+      // Order matters: everything that changes how many panels the roof holds
+      // has to be set before the count, or the count gets clamped to a stale max.
+      win.solvioSetObstructions?.(roof.obstructions);
+      setTilt(win, tilted);
+      // rows must follow the roof edges rather than the compass
       if (roof.offAxisDeg > OFF_AXIS_NEEDS_ANGLED_DEG) selectAngledLayout(win);
       // keep the 3D panel count honest against the quote
       win.solvioSetConfig?.({ modules: panelCount });
@@ -60,7 +78,7 @@ export default function Roof3D({ roof, panelCount }: Props) {
     } catch {
       setFailed(true);
     }
-  }, [roof, panelCount]);
+  }, [roof, panelCount, tilted]);
 
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
@@ -93,7 +111,11 @@ export default function Roof3D({ roof, panelCount }: Props) {
       <p className="mt-1.5 text-xs text-slate-500">
         {failed
           ? "The 3D view could not be loaded — the 2D layout above is the design of record."
-          : `Your roof to scale: ${roof.widthM} m east–west × ${roof.lengthM} m north–south, oriented as it sits on the ground (the arrow on the deck points north). Drag to orbit, scroll to zoom.`}
+          : `Your roof to scale: ${roof.widthM} m east–west × ${roof.lengthM} m north–south, oriented as it sits on the ground (the arrow on the deck points north)` +
+            (roof.obstructions.length > 0
+              ? `, with ${roof.obstructions.length} obstruction${roof.obstructions.length > 1 ? "s" : ""} kept clear. `
+              : ". ") +
+            "Drag to orbit, scroll to zoom."}
       </p>
     </div>
   );

@@ -137,7 +137,7 @@ export default async function ProposalPage(props: { params: Promise<{ id: string
     hasRender?: boolean;
   };
   const recommended = result.scenarios[0]?.options[0];
-  const roof3d = roof3dFromPolygon(result.site.roofPolygon);
+  const roof3d = roof3dFromPolygon(result.site.roofPolygon, result.site.obstructions);
   const dateStr = new Date(createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
 
   return (
@@ -233,7 +233,11 @@ export default async function ProposalPage(props: { params: Promise<{ id: string
       {roof3d && (
         <section className="mb-8">
           <h2 className="mb-3 text-lg font-black text-slate-900">See it in 3D</h2>
-          <Roof3D roof={roof3d} panelCount={recommended?.panelCount ?? result.packing.count} />
+          <Roof3D
+            roof={roof3d}
+            panelCount={recommended?.panelCount ?? result.packing.count}
+            tilted={result.site.roofType === "flat"}
+          />
         </section>
       )}
 

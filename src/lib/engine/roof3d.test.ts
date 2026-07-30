@@ -64,6 +64,35 @@ describe("roof outline → 3D model payload", () => {
     }
   });
 
+  it("normalises obstructions against the roof's box, not their own", () => {
+    const roof = shape([[0, 0], [40, 0], [40, 20], [0, 20]]);
+    // a 4 x 4 m box whose centre sits at 10 m east, 5 m north
+    const tank = shape([[8, 3], [12, 3], [12, 7], [8, 7]]);
+    const out = roof3dFromPolygon(roof, [tank])!;
+    expect(out.obstructions).toHaveLength(1);
+    const uv = out.obstructions[0];
+    const cu = uv.reduce((s, [u]) => s + u, 0) / 4;
+    const cv = uv.reduce((s, [, v]) => s + v, 0) / 4;
+    expect(cu).toBeCloseTo(10 / 40, 2); // NOT 0.5 — that would be its own box
+    expect(cv).toBeCloseTo(5 / 20, 2);
+    // and it keeps its real 4 x 4 m shape: 0.1 of a 40 m width, 0.2 of a 20 m length
+    expect(Math.max(...uv.map(([u]) => u)) - Math.min(...uv.map(([u]) => u))).toBeCloseTo(0.1, 2);
+    expect(Math.max(...uv.map(([, v]) => v)) - Math.min(...uv.map(([, v]) => v))).toBeCloseTo(0.2, 2);
+  });
+
+  it("drops obstructions that fall outside the roof", () => {
+    const roof = shape([[0, 0], [20, 0], [20, 20], [0, 20]]);
+    const inside = shape([[8, 8], [12, 8], [12, 12], [8, 12]]);
+    const milesAway = shape([[200, 200], [204, 200], [204, 204], [200, 204]]);
+    expect(roof3dFromPolygon(roof, [inside, milesAway])!.obstructions).toHaveLength(1);
+  });
+
+  it("has no obstructions when none were drawn", () => {
+    const roof = shape([[0, 0], [20, 0], [20, 20], [0, 20]]);
+    expect(roof3dFromPolygon(roof)!.obstructions).toEqual([]);
+    expect(roof3dFromPolygon(roof, [])!.obstructions).toEqual([]);
+  });
+
   it("rejects degenerate outlines", () => {
     expect(roof3dFromPolygon(shape([[0, 0], [5, 0]]))).toBeNull();
     // a 30 m line has no north–south extent to build from

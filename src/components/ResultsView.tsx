@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { roof3dFromPolygon } from "@/lib/engine/roof3d";
+import Roof3D from "@/components/Roof3D";
 import type { OptimizationMode, ProposalResult, SystemOption } from "@/lib/engine/types";
 
 const MAX_PHOTOS = 1;
@@ -51,6 +53,12 @@ export default function ResultsView({
   busy: boolean;
 }) {
   const router = useRouter();
+  // the outline is fixed by now, so only recompute if the site itself changes
+  const roof3d = useMemo(
+    () => roof3dFromPolygon(result.site.roofPolygon, result.site.obstructions),
+    [result.site.roofPolygon, result.site.obstructions]
+  );
+  const recommendedCount = result.scenarios[0]?.options[0]?.panelCount ?? result.packing.count;
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState("");
   const [saveErr, setSaveErr] = useState("");
@@ -125,6 +133,15 @@ export default function ResultsView({
       <p className="text-sm text-slate-600">
         Output {result.outputType} · {result.site.address} · {result.site.utility} · yield {result.site.yieldKwhPerKwpYr} kWh/kWp/yr (tilt {result.site.tiltDeg}°, azimuth {Math.round(result.site.azimuthDeg)}°) · roof fits {result.packing.count} panels ({result.packing.maxKw.toFixed(1)} kWp)
       </p>
+
+      {roof3d && (
+        <div className="space-y-2">
+          <h3 className="font-bold text-slate-900">
+            3D preview <span className="text-sm font-normal text-slate-500">— check this before generating the proposal; it is what the customer will see</span>
+          </h3>
+          <Roof3D roof={roof3d} panelCount={recommendedCount} tilted={result.site.roofType === "flat"} />
+        </div>
+      )}
 
       {result.scenarios.map((s, i) => (
         <div key={i} className="space-y-3">
