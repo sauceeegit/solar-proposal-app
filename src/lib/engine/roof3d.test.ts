@@ -49,6 +49,21 @@ describe("roof outline → 3D model payload", () => {
     expect(wide.widthM / wide.lengthM).toBeCloseTo(5, 1);
   });
 
+  it("reports a north-aligned roof as on-axis", () => {
+    expect(roof3dFromPolygon(shape([[0, 0], [30, 0], [30, 20], [0, 20]]))!.offAxisDeg).toBeCloseTo(0, 1);
+  });
+
+  it("measures how far an angled roof is off the compass axes", () => {
+    for (const deg of [12, 35, 58, 104]) {
+      const a = (deg * Math.PI) / 180;
+      const src: [number, number][] = [[0, 0], [30, 0], [30, 12], [0, 12]];
+      const rotated = shape(src.map(([x, y]) => [x * Math.cos(a) - y * Math.sin(a), x * Math.sin(a) + y * Math.cos(a)]));
+      // the grid is square and edges are undirected, so the answer folds into 0..45°
+      const folded = Math.min(deg % 90, 90 - (deg % 90));
+      expect(roof3dFromPolygon(rotated)!.offAxisDeg).toBeCloseTo(folded, 0);
+    }
+  });
+
   it("rejects degenerate outlines", () => {
     expect(roof3dFromPolygon(shape([[0, 0], [5, 0]]))).toBeNull();
     // a 30 m line has no north–south extent to build from

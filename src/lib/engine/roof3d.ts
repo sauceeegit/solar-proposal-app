@@ -14,9 +14,31 @@ export interface Roof3D {
   widthM: number;
   /** north–south extent of the outline, metres */
   lengthM: number;
+  /**
+   * How far the roof's longest edge sits off the nearest compass axis, 0–45°.
+   * Above a couple of degrees the model needs its angled layout, or it tiles
+   * panels north-up and they run diagonally across the roof.
+   */
+  offAxisDeg: number;
 }
 
 const r4 = (n: number) => Math.round(n * 1e4) / 1e4;
+
+/** Deviation of the polygon's longest edge from the nearest compass axis, 0–45°. */
+function longestEdgeOffAxisDeg(pts: { x: number; y: number }[]): number {
+  let bestLen = -1, deg = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length;
+    const dx = pts[j].x - pts[i].x, dy = pts[j].y - pts[i].y;
+    const len = Math.hypot(dx, dy);
+    if (len <= bestLen) continue;
+    bestLen = len;
+    // edges are undirected and the grid is square, so fold into 0..45°
+    const a = ((Math.atan2(dy, dx) * 180) / Math.PI + 360) % 90;
+    deg = Math.min(a, 90 - a);
+  }
+  return Math.round(deg * 10) / 10;
+}
 
 /**
  * Convert a confirmed roof polygon into the payload `solvioSetRoof` expects.
@@ -34,5 +56,6 @@ export function roof3dFromPolygon(poly: LatLng[]): Roof3D | null {
     outline: pts.map((p) => [r4((p.x - minX) / widthM), r4((p.y - minY) / lengthM)] as [number, number]),
     widthM: Math.round(widthM * 100) / 100,
     lengthM: Math.round(lengthM * 100) / 100,
+    offAxisDeg: longestEdgeOffAxisDeg(pts),
   };
 }
