@@ -2,6 +2,8 @@ import { notFound } from "next/navigation";
 import { PRICES_LAST_REVIEWED } from "@/config/pricing";
 import { cashFlowSeries } from "@/lib/engine/economics";
 import { toLocalMeters } from "@/lib/engine/roof";
+import { roof3dFromPolygon } from "@/lib/engine/roof3d";
+import Roof3D from "@/components/Roof3D";
 import { centroid, fitZoom, pixelInImage } from "@/lib/mercator";
 import { readText } from "@/lib/storage";
 import type { Narrative } from "@/lib/narrative";
@@ -135,6 +137,7 @@ export default async function ProposalPage(props: { params: Promise<{ id: string
     hasRender?: boolean;
   };
   const recommended = result.scenarios[0]?.options[0];
+  const roof3d = roof3dFromPolygon(result.site.roofPolygon);
   const dateStr = new Date(createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
 
   return (
@@ -225,6 +228,14 @@ export default async function ProposalPage(props: { params: Promise<{ id: string
           facing {Math.round(result.site.azimuthDeg)}° · yield {result.site.yieldKwhPerKwpYr} kWh/kWp/yr (NREL PVWatts)
         </p>
       </section>
+
+      {/* ── 3D view, driven by the same traced outline ── */}
+      {roof3d && (
+        <section className="mb-8">
+          <h2 className="mb-3 text-lg font-black text-slate-900">See it in 3D</h2>
+          <Roof3D roof={roof3d} panelCount={recommended?.panelCount ?? result.packing.count} />
+        </section>
+      )}
 
       {/* ── Options ── */}
       {result.scenarios.map((s, i) => (

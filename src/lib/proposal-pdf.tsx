@@ -149,6 +149,7 @@ function ProposalDoc({ result, narrative, images, overlay, createdAt }: {
               </Svg>
             </View>
             <Text style={s.caption}>{Math.round(result.packing.footprintM2)} m² roof · up to {result.packing.count} panels ({result.packing.maxKw.toFixed(1)} kWp) · facing {Math.round(result.site.azimuthDeg)}° · yield {result.site.yieldKwhPerKwpYr} kWh/kWp/yr (NREL PVWatts)</Text>
+            <Text style={s.caption}>A 3D model of this roof, built to these dimensions, can be rotated on the online version of this proposal.</Text>
           </View>
         )}
 
