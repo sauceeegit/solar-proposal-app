@@ -1,5 +1,5 @@
 // ── System optimizer: Output A / B, 4 modes (spec §5.3, §6) ───────────
-import { EXPORT, PANEL, SYSTEM } from "@/config/assumptions";
+import { EXPORT, PANEL, RESIDENTIAL_FULL_ROOF_MIN_KW, SYSTEM } from "@/config/assumptions";
 import { BATTERY_SIZES_KWH as BATTERY_SIZES, INVERTERS, batteryPrice, solarSystemPrice, type InverterModel } from "@/config/pricing";
 import { annualLoadFromBill, annualLoadFromEUI, daytimeLoadShare } from "./load";
 import { isExportEligible, simulateFlows } from "./battery";
@@ -193,10 +193,8 @@ export function optimize(site: SiteInput, mode: OptimizationMode = "max-savings"
       : `Energy use estimated from building type (${site.use}), ${Math.round(packing.footprintM2)} m² footprint × ${site.floors} floor(s) — no bill provided.`
   );
 
-  // Every proposal leads with the whole roof. Commercial buildings stop there:
-  // they consume far more than the roof can generate and earn no export credit,
-  // so more panels is simply more saving.
-  const scenarios: Scenario[] = [
+  const exportKw = (EXPORT_CAP_PANELS * PANEL.watt) / 1000;
+  const fullRoof = () =>
     makeScenario(
       "Maximum roof utilization",
       `The largest system this roof allows — ${packing.count} panels (${packing.maxKw.toFixed(1)} kWp).`,
@@ -204,27 +202,39 @@ export function optimize(site: SiteInput, mode: OptimizationMode = "max-savings"
       [packing.count],
       site,
       "max-roof"
-    ),
-  ];
-
-  // Residential gets a second, smaller option: the biggest system that still
-  // sits under the export ceiling, so surplus is paid for instead of dumped.
-  const exportKw = (EXPORT_CAP_PANELS * PANEL.watt) / 1000;
-  if (site.use === "residential" && EXPORT_CAP_PANELS < packing.count) {
-    scenarios.push(
-      makeScenario(
-        `Export-eligible system — ${EXPORT_CAP_PANELS} panels`,
-        `${EXPORT_CAP_PANELS} panels (${exportKw.toFixed(2)} kWp), the largest system that stays under the ${EXPORT.maxSystemKw} kW ceiling for the ฿${EXPORT.rateTHB}/kWh export credit.`,
-        load,
-        [EXPORT_CAP_PANELS],
-        site,
-        mode
-      )
     );
-  } else if (site.use === "residential") {
+  const exportEligible = () =>
+    makeScenario(
+      `Export-eligible system — ${EXPORT_CAP_PANELS} panels`,
+      `${EXPORT_CAP_PANELS} panels (${exportKw.toFixed(2)} kWp), the largest system that stays under the ${EXPORT.maxSystemKw} kW ceiling for the ฿${EXPORT.rateTHB}/kWh export credit.`,
+      load,
+      [EXPORT_CAP_PANELS],
+      site,
+      mode
+    );
+
+  const scenarios: Scenario[] = [];
+  if (site.use !== "residential") {
+    // Commercial consumes far more than the roof can generate and earns no
+    // export credit, so more panels is simply more saving: quote the lot.
+    scenarios.push(fullRoof());
+  } else if (packing.maxKw <= EXPORT.maxSystemKw) {
+    // Whole roof already fits under the ceiling — it IS the export-eligible
+    // system, so there is nothing to compare it against.
+    scenarios.push(fullRoof());
     notes.push(
       `This roof holds ${packing.count} panels (${packing.maxKw.toFixed(1)} kWp), already within the ${EXPORT.maxSystemKw} kW export ceiling, so no smaller alternative is shown.`
     );
+  } else if (packing.maxKw < RESIDENTIAL_FULL_ROOF_MIN_KW) {
+    // Only just over the ceiling: the extra kWp are not worth losing the export
+    // credit on the whole system, so the full roof is not offered at all.
+    scenarios.push(exportEligible());
+    notes.push(
+      `The roof could hold ${packing.count} panels (${packing.maxKw.toFixed(1)} kWp), but going over ${EXPORT.maxSystemKw} kW forfeits the ฿${EXPORT.rateTHB}/kWh export credit on the whole system for only ${(packing.maxKw - exportKw).toFixed(1)} kWp more, so it is not quoted below ${RESIDENTIAL_FULL_ROOF_MIN_KW} kWp.`
+    );
+  } else {
+    // Big enough that the extra capacity is worth putting on the table.
+    scenarios.push(fullRoof(), exportEligible());
   }
 
   // daytime share note for context

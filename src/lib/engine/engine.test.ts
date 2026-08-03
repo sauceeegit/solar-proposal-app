@@ -5,7 +5,7 @@ import { isExportEligible, simulateFlows } from "./battery";
 import { computeEconomics } from "./economics";
 import { utilityForProvince } from "./utility";
 import { EXPORT_CAP_PANELS, optimize } from "./optimizer";
-import { EXPORT } from "@/config/assumptions";
+import { EXPORT, RESIDENTIAL_FULL_ROOF_MIN_KW } from "@/config/assumptions";
 import type { SiteInput } from "./types";
 
 // ~30m × 20m rectangle near Phuket (7.8376 N, 98.2997 E)
@@ -261,8 +261,9 @@ describe("optimizer end-to-end (hotel, Output B)", () => {
     }
   });
 
-  it("residential gets the full roof plus an export-eligible alternative", () => {
+  it("residential: a roof over 13 kWp gets the full roof plus the export option", () => {
     const home = optimize({ ...hotelSite, use: "residential", phase: "single" }, "max-savings");
+    expect(home.packing.maxKw).toBeGreaterThan(RESIDENTIAL_FULL_ROOF_MIN_KW);
     expect(home.scenarios).toHaveLength(2);
     expect(home.scenarios[0].options[0].panelCount).toBe(home.packing.count);
     // 22 × 450 W = 9.9 kW, just under the 10 kW export ceiling
@@ -272,6 +273,55 @@ describe("optimizer end-to-end (hotel, Output B)", () => {
       expect(o.dcKw).toBeLessThanOrEqual(EXPORT.maxSystemKw);
       expect(isExportEligible("residential", o.dcKw)).toBe(true);
     }
+  });
+
+  /** Rectangle w × d metres at the test origin. */
+  function rect(w: number, d: number) {
+    const dLngW = w / (M_PER_DEG_LAT * Math.cos((lat0 * Math.PI) / 180));
+    const dLatD = d / M_PER_DEG_LAT;
+    return [
+      { lat: lat0, lng: lng0 },
+      { lat: lat0, lng: lng0 + dLngW },
+      { lat: lat0 + dLatD, lng: lng0 + dLngW },
+      { lat: lat0 + dLatD, lng: lng0 },
+    ];
+  }
+
+  /**
+   * Find a roof whose packed size lands strictly inside [minKw, maxKw). Panel
+   * counts step in 0.45 kWp jumps, so the roof has to be searched for rather
+   * than calculated.
+   */
+  function homeWithRoofInBand(minKw: number, maxKw: number) {
+    for (const d of [6, 7, 8, 9, 10, 12]) {
+      for (let w = 5; w <= 40; w += 0.2) {
+        const poly = rect(w, d);
+        const pk = packPanels(poly, "flat");
+        if (pk.maxKw >= minKw && pk.maxKw < maxKw) {
+          return optimize({ ...hotelSite, use: "residential", phase: "single", roofPolygon: poly }, "max-savings");
+        }
+      }
+    }
+    throw new Error(`no roof lands in [${minKw}, ${maxKw}) kWp`);
+  }
+
+  it("residential: a roof between 10 and 13 kWp is quoted ONLY at the export size", () => {
+    const home = homeWithRoofInBand(EXPORT.maxSystemKw + 0.01, RESIDENTIAL_FULL_ROOF_MIN_KW);
+    expect(home.packing.maxKw).toBeGreaterThan(EXPORT.maxSystemKw);
+    expect(home.packing.maxKw).toBeLessThan(RESIDENTIAL_FULL_ROOF_MIN_KW);
+    expect(home.scenarios).toHaveLength(1);
+    // the full roof is deliberately NOT offered — losing the credit is not worth it
+    expect(home.scenarios[0].options[0].panelCount).toBe(EXPORT_CAP_PANELS);
+    expect(home.packing.count).toBeGreaterThan(EXPORT_CAP_PANELS);
+    expect(home.assumptionNotes.some((n) => /forfeits the ฿2.2\/kWh export credit/.test(n))).toBe(true);
+  });
+
+  it("residential: a roof under 10 kWp is quoted at full size only", () => {
+    const home = homeWithRoofInBand(5, EXPORT.maxSystemKw);
+    expect(home.packing.maxKw).toBeLessThanOrEqual(EXPORT.maxSystemKw);
+    expect(home.scenarios).toHaveLength(1);
+    expect(home.scenarios[0].options[0].panelCount).toBe(home.packing.count);
+    expect(isExportEligible("residential", home.scenarios[0].options[0].dcKw)).toBe(true);
   });
 
   it("the full-roof residential option is too big to earn the export credit", () => {
@@ -292,18 +342,25 @@ describe("optimizer end-to-end (hotel, Output B)", () => {
     expect(home.scenarios[0].options[0].flows.exportedKwh).toBe(0);
   });
 
-  it("skips the second scenario when the whole roof is already export-eligible", () => {
-    // a roof only big enough for a handful of panels
-    const small = [
-      { lat: lat0, lng: lng0 },
-      { lat: lat0, lng: lng0 + dLng / 4 },
-      { lat: lat0 + dLat / 4, lng: lng0 + dLng / 4 },
-      { lat: lat0 + dLat / 4, lng: lng0 },
-    ];
-    const home = optimize({ ...hotelSite, use: "residential", phase: "single", roofPolygon: small }, "max-savings");
-    expect(home.packing.count).toBeLessThanOrEqual(EXPORT_CAP_PANELS);
-    expect(home.scenarios).toHaveLength(1);
+  it("says why no alternative is shown when the whole roof is already export-eligible", () => {
+    const home = homeWithRoofInBand(5, EXPORT.maxSystemKw);
     expect(home.assumptionNotes.some((n) => /already within the 10 kW export ceiling/.test(n))).toBe(true);
+  });
+
+  it("commercial ignores the residential bands entirely", () => {
+    // find the same 10–13 kWp roof residential would cut back to 22 panels
+    for (const d of [6, 7, 8, 9, 10, 12]) {
+      for (let w = 5; w <= 40; w += 0.2) {
+        const poly = rect(w, d);
+        const pk = packPanels(poly, "flat");
+        if (!(pk.maxKw > EXPORT.maxSystemKw && pk.maxKw < RESIDENTIAL_FULL_ROOF_MIN_KW)) continue;
+        const office = optimize({ ...hotelSite, use: "office", roofPolygon: poly }, "max-savings");
+        expect(office.scenarios).toHaveLength(1);
+        expect(office.scenarios[0].options[0].panelCount).toBe(office.packing.count);
+        return;
+      }
+    }
+    throw new Error("no roof in the band");
   });
 
   it("reports measured shading when Solar API provided it, else the assumption", () => {

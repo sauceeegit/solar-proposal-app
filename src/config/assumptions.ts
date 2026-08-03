@@ -36,6 +36,14 @@ export const TARIFF_THB_PER_KWH: Record<Utility, Record<"residential" | "commerc
 /** Export credit: residential ≤10 kW only, subject to registration + quota. */
 export const EXPORT = { rateTHB: 2.2, maxSystemKw: 10, residentialOnly: true };
 
+/**
+ * Residential sizing rule. A roof that only just exceeds the 10 kW export
+ * ceiling is not worth quoting at full size: the few extra kWp do not pay for
+ * losing the export credit on the whole system. Only above this figure is the
+ * full roof offered alongside the export-eligible option.
+ */
+export const RESIDENTIAL_FULL_ROOF_MIN_KW = 13;
+
 /** MEA service area; everywhere else in Thailand is PEA. */
 export const MEA_PROVINCES = ["Bangkok", "กรุงเทพมหานคร", "Nonthaburi", "นนทบุรี", "Samut Prakan", "สมุทรปราการ"];
 

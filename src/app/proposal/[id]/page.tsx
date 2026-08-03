@@ -138,6 +138,8 @@ export default async function ProposalPage(props: { params: Promise<{ id: string
   };
   const recommended = result.scenarios[0]?.options[0];
   const roof3d = roof3dFromPolygon(result.site.roofPolygon, result.site.obstructions);
+  // the 3D shows the leading scenario — never more panels than are being quoted
+  const shown3dPanels = recommended?.panelCount ?? result.packing.count;
   const dateStr = new Date(createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
 
   return (
@@ -234,11 +236,13 @@ export default async function ProposalPage(props: { params: Promise<{ id: string
         <section className="mb-8">
           <h2 className="mb-1 text-lg font-black text-slate-900">See it in 3D</h2>
           <p className="mb-3 text-xs text-slate-400">
-            The roof at full capacity — {result.packing.count} panels ({result.packing.maxKw.toFixed(1)} kWp).
-            {result.scenarios.length > 1 && " Smaller systems above use the same layout, with fewer rows."}
+            {shown3dPanels} panels ({((shown3dPanels * 450) / 1000).toFixed(1)} kWp)
+            {shown3dPanels === result.packing.count
+              ? " — the roof at full capacity."
+              : ` — the system quoted above; this roof could hold up to ${result.packing.count}.`}
+            {result.scenarios.length > 1 && " The other option uses the same layout, with fewer rows."}
           </p>
-          {/* always the full roof, so the 3D shows what the building can take */}
-          <Roof3D roof={roof3d} panelCount={result.packing.count} tilted={result.site.roofType === "flat"} />
+          <Roof3D roof={roof3d} panelCount={shown3dPanels} tilted={result.site.roofType === "flat"} />
         </section>
       )}
 

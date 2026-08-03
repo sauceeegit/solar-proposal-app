@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { PANEL } from "@/config/assumptions";
 import { roof3dFromPolygon } from "@/lib/engine/roof3d";
 import Roof3D from "@/components/Roof3D";
 import type { OptimizationMode, ProposalResult, SystemOption } from "@/lib/engine/types";
@@ -58,9 +59,11 @@ export default function ResultsView({
     () => roof3dFromPolygon(result.site.roofPolygon, result.site.obstructions),
     [result.site.roofPolygon, result.site.obstructions]
   );
-  // the 3D always shows the roof filled — not the smaller export-eligible
-  // option — so it reads as "here is everything this roof can take"
-  const maxPanels = result.packing.count;
+  // The 3D follows the leading scenario, which is the full roof whenever the
+  // full roof is quoted — but never shows more panels than are on offer.
+  const shownPanels = result.scenarios[0]?.options[0]?.panelCount ?? result.packing.count;
+  const shownKw = (shownPanels * PANEL.watt) / 1000;
+  const isFullRoof = shownPanels === result.packing.count;
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState("");
   const [saveErr, setSaveErr] = useState("");
@@ -139,10 +142,11 @@ export default function ResultsView({
       {roof3d && (
         <div className="space-y-2">
           <h3 className="font-bold text-slate-900">
-            3D preview — full roof, {maxPanels} panels ({result.packing.maxKw.toFixed(1)} kWp)
+            3D preview — {shownPanels} panels ({shownKw.toFixed(1)} kWp)
+            {isFullRoof ? ", the full roof" : `, of ${result.packing.count} the roof could hold`}
             <span className="text-sm font-normal text-slate-500"> — check this before generating the proposal; it is what the customer will see</span>
           </h3>
-          <Roof3D roof={roof3d} panelCount={maxPanels} tilted={result.site.roofType === "flat"} />
+          <Roof3D roof={roof3d} panelCount={shownPanels} tilted={result.site.roofType === "flat"} />
         </div>
       )}
 
